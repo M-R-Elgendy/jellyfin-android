@@ -227,6 +227,32 @@
         app:layout_constraintBottom_toBottomOf="parent"
         app:layout_constraintStart_toEndOf="@id/speed_button" />
 
+    <!-- <androidx.appcompat.widget.AppCompatImageButton
+        android:id="@+id/rotate_screen_button"
+        android:layout_width="@dimen/exo_bottom_controls_size"
+        android:layout_height="@dimen/exo_bottom_controls_size"
+        android:layout_marginBottom="@dimen/exo_bottom_controls_margin"
+        android:background="@drawable/ripple_background_circular"
+        android:padding="@dimen/exo_bottom_controls_padding"
+        android:src="@drawable/ic_screen_rotation_white_24dp"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintStart_toEndOf="@id/quality_button" /> -->
+
+        <androidx.appcompat.widget.AppCompatImageButton
+        android:id="@+id/rotate_screen_button"
+        android:layout_width="48dp"
+        android:layout_height="48dp"
+        android:layout_gravity="bottom|end"
+        android:layout_marginStart="16dp"
+        android:layout_marginBottom="16dp"
+        android:background="@drawable/ripple_background_circular"
+        android:padding="8dp"
+        android:src="@drawable/ic_screen_rotation_white_24dp"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        android:visibility="gone" />
+
     <androidx.appcompat.widget.AppCompatImageButton
         android:id="@+id/decoder_button"
         android:layout_width="@dimen/exo_bottom_controls_size"
@@ -236,7 +262,7 @@
         android:padding="@dimen/exo_bottom_controls_padding"
         android:src="@drawable/ic_video_settings_white_24dp"
         app:layout_constraintBottom_toBottomOf="parent"
-        app:layout_constraintStart_toEndOf="@id/quality_button" />
+        app:layout_constraintStart_toEndOf="@id/rotate_screen_button" />
 
     <androidx.appcompat.widget.AppCompatImageButton
         android:id="@+id/info_button"

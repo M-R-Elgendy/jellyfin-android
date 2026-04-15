@@ -72,6 +72,12 @@ class NativeInterface(private val context: Context) : KoinComponent {
     }
 
     @JavascriptInterface
+    fun toggleOrientation(): Boolean {
+        emitEvent(ActivityEvent.ToggleOrientation)
+        return true
+    }
+
+    @JavascriptInterface
     fun openUrl(uri: String): Boolean {
         emitEvent(ActivityEvent.OpenUrl(uri))
         return true

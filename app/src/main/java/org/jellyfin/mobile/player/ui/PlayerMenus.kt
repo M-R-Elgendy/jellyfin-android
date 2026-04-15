@@ -50,6 +50,7 @@ class PlayerMenus(
     private val subtitlesButton: ImageButton by playerControlsBinding::subtitlesButton
     private val speedButton: View by playerControlsBinding::speedButton
     private val qualityButton: View by playerControlsBinding::qualityButton
+    private val rotateScreenButton: View by playerControlsBinding::rotateScreenButton
     private val decoderButton: View by playerControlsBinding::decoderButton
     private val infoButton: View by playerControlsBinding::infoButton
     private val playbackInfo: TextView by playerBinding::playbackInfo
@@ -110,6 +111,9 @@ class PlayerMenus(
         qualityButton.setOnClickListener {
             fragment.suppressControllerAutoHide(true)
             qualityMenu.show()
+        }
+        rotateScreenButton.setOnClickListener {
+            fragment.rotateScreen()
         }
         decoderButton.setOnClickListener {
             fragment.suppressControllerAutoHide(true)

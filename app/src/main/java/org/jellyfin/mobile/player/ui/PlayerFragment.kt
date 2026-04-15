@@ -274,6 +274,17 @@ class PlayerFragment : Fragment(), BackPressInterceptor {
         }
     }
 
+
+    fun rotateScreen() {
+        val activity = requireActivity()
+        val current = resources.configuration.orientation
+        activity.requestedOrientation = if (current == Configuration.ORIENTATION_LANDSCAPE) {
+            ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+        } else {
+            ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+        }
+    }
+
     /**
      * If true, the player controls will show indefinitely
      */

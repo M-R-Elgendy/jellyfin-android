@@ -3,6 +3,7 @@ package org.jellyfin.mobile.events
 import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.content.pm.ActivityInfo
+import android.content.res.Configuration
 import android.os.Bundle
 import androidx.core.net.toUri
 import androidx.lifecycle.Lifecycle
@@ -22,6 +23,7 @@ import org.jellyfin.mobile.utils.Constants
 import org.jellyfin.mobile.utils.extensions.addFragment
 import org.jellyfin.mobile.utils.removeDownload
 import org.jellyfin.mobile.utils.requestDownload
+import org.jellyfin.mobile.webapp.WebViewFragment
 import org.jellyfin.mobile.webapp.WebappFunctionChannel
 import timber.log.Timber
 
@@ -58,6 +60,16 @@ class ActivityEventHandler(
                     fullscreenHelper.disableFullscreen()
                     // Reset window background color
                     window.setBackgroundDrawableResource(R.color.theme_background)
+                }
+                val webViewFragment = supportFragmentManager.findFragmentById(R.id.fragment_container) as? WebViewFragment
+                webViewFragment?.onWebFullscreenChanged(event.isFullscreen)
+            }
+            ActivityEvent.ToggleOrientation -> {
+                val current = resources.configuration.orientation
+                requestedOrientation = if (current == Configuration.ORIENTATION_LANDSCAPE) {
+                    ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+                } else {
+                    ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
                 }
             }
             is ActivityEvent.LaunchNativePlayer -> {

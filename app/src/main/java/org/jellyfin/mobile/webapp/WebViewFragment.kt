@@ -1,6 +1,8 @@
 package org.jellyfin.mobile.webapp
 
 import android.content.Intent
+import android.content.pm.ActivityInfo
+import android.content.res.Configuration
 import android.graphics.Rect
 import android.net.Uri
 import android.os.Bundle
@@ -159,6 +161,16 @@ class WebViewFragment : Fragment(), BackPressInterceptor, JellyfinWebChromeClien
             onSelectServer(error = false)
         }
 
+        webViewBinding!!.rotateScreenButton.setOnClickListener {
+            val activity = activity ?: return@setOnClickListener
+            val current = resources.configuration.orientation
+            activity.requestedOrientation = if (current == Configuration.ORIENTATION_LANDSCAPE) {
+                ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+            } else {
+                ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+            }
+        }
+
         // Process JS functions called from other components (e.g. the PlayerActivity)
         lifecycleScope.launch {
             for (function in webappFunctionChannel) {
@@ -174,6 +186,10 @@ class WebViewFragment : Fragment(), BackPressInterceptor, JellyfinWebChromeClien
     override fun onDestroyView() {
         super.onDestroyView()
         webViewBinding = null
+    }
+
+    fun onWebFullscreenChanged(isFullscreen: Boolean) {
+        webViewBinding?.rotateScreenButton?.isVisible = isFullscreen
     }
 
     private fun WebView.initialize() {
