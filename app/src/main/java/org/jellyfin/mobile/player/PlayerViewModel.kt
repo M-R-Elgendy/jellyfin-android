@@ -73,6 +73,7 @@ import org.jellyfin.sdk.api.operations.DisplayPreferencesApi
 import org.jellyfin.sdk.api.operations.HlsSegmentApi
 import org.jellyfin.sdk.api.operations.PlayStateApi
 import org.jellyfin.sdk.api.operations.UserApi
+import org.jellyfin.sdk.model.api.BaseItemDto
 import org.jellyfin.sdk.model.api.ChapterInfo
 import org.jellyfin.sdk.model.api.MediaSegmentDto
 import org.jellyfin.sdk.model.api.PlayMethod
@@ -108,6 +109,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
     private val trackSelector = DefaultTrackSelector(getApplication())
     val trackSelectionHelper = TrackSelectionHelper(this, trackSelector)
     val queueManager = QueueManager(this)
+    val queueItems: LiveData<List<BaseItemDto>> get() = queueManager.queueItems
     val mediaSourceOrNull: JellyfinMediaSource?
         get() = queueManager.getCurrentMediaSourceOrNull()
     private val mediaSegmentRepository: MediaSegmentRepository by inject()
@@ -620,6 +622,12 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
     fun skipToNext() {
         viewModelScope.launch {
             queueManager.next()
+        }
+    }
+
+    fun playQueueItem(index: Int) {
+        viewModelScope.launch {
+            queueManager.playAtIndex(index)
         }
     }
 

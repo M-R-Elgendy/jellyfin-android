@@ -22,11 +22,13 @@ import org.jellyfin.mobile.player.source.LocalJellyfinMediaSource
 import org.jellyfin.mobile.player.source.RemoteJellyfinMediaSource
 import org.jellyfin.mobile.player.ui.playermenuhelper.PlayerMenuHelper
 import org.jellyfin.mobile.player.ui.playermenuhelper.SkipMediaSegmentButton
+import org.jellyfin.sdk.model.api.BaseItemDto
 import org.jellyfin.sdk.model.api.ChapterInfo
 import org.jellyfin.sdk.model.api.MediaStream
 import org.koin.core.component.KoinComponent
 import org.koin.core.component.inject
 import java.util.Locale
+import java.util.UUID
 
 /**
  *  Provides a menu UI for audio, subtitle and video stream selection
@@ -125,7 +127,11 @@ class PlayerMenus(
         fragment.setPlayerMenuHelper(playerMenuHelper)
     }
 
-    fun onQueueItemChanged(mediaSource: JellyfinMediaSource, hasNext: Boolean) {
+    fun onQueueItemChanged(
+        mediaSource: JellyfinMediaSource,
+        hasNext: Boolean,
+        queueItems: List<BaseItemDto>,
+    ) {
         // previousButton is always enabled and will rewind if at the start of the queue
         nextButton.isEnabled = hasNext
 
@@ -185,11 +191,43 @@ class PlayerMenus(
             },
         )
 
+        val queuePositionInfo = buildQueuePositionInfo(mediaSource, queueItems)
+        val upNextQueueInfo = buildUpNextQueueInfo(queueItems, mediaSource.itemId)
+
         playbackInfo.text = listOf(
             playMethod,
+            queuePositionInfo,
+            upNextQueueInfo,
             videoTracksInfo,
             audioTracksInfo,
-        ).joinToString("\n\n")
+        ).filter { it.isNotBlank() }.joinToString("\n\n")
+    }
+
+    private fun buildQueuePositionInfo(mediaSource: JellyfinMediaSource, queueItems: List<BaseItemDto>): String {
+        if (queueItems.size <= 1) return ""
+        val index = queueItems.indexOfFirst { it.id == mediaSource.itemId }
+        if (index < 0) return ""
+        return fragment.getString(R.string.playback_info_queue_position, index + 1, queueItems.size)
+    }
+
+    private fun buildUpNextQueueInfo(queueItems: List<BaseItemDto>, currentItemId: UUID): String {
+        val index = queueItems.indexOfFirst { it.id == currentItemId }
+        if (index < 0) return ""
+        val upcoming = queueItems.drop(index + 1)
+        if (upcoming.isEmpty()) return ""
+
+        val lines = upcoming.take(MAX_UP_NEXT_QUEUE_DISPLAY).joinToString("\n") { item ->
+            val title = item.name?.takeUnless(String::isEmpty)
+                ?: fragment.getString(R.string.playback_info_stream_unknown_title)
+            "- $title"
+        }
+        val overflow = upcoming.size - MAX_UP_NEXT_QUEUE_DISPLAY
+        val tail = if (overflow > 0) {
+            "\n" + fragment.getString(R.string.playback_info_and_x_more, overflow)
+        } else {
+            ""
+        }
+        return fragment.getString(R.string.playback_info_up_next_in_queue) + "\n" + lines + tail
     }
 
     private fun updateLayoutConstraints(hasChapters: Boolean) {
@@ -402,6 +440,7 @@ class PlayerMenus(
 
         private const val MAX_VIDEO_STREAMS_DISPLAY = 3
         private const val MAX_AUDIO_STREAMS_DISPLAY = 5
+        private const val MAX_UP_NEXT_QUEUE_DISPLAY = 5
 
         private const val BITRATE_MEGA_BIT = 1_000_000
         private const val BITRATE_KILO_BIT = 1_000

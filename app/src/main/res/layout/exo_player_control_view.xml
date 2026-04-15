@@ -260,4 +260,16 @@
         android:src="@drawable/ic_fullscreen_enter_white_32dp"
         app:layout_constraintBottom_toBottomOf="parent"
         app:layout_constraintEnd_toEndOf="parent" />
+
+    <!-- Drawn above controls; touch listener always returns false so seeking/buttons still work underneath. -->
+    <View
+        android:id="@+id/up_next_swipe_capture"
+        android:layout_width="0dp"
+        android:layout_height="@dimen/exo_up_next_swipe_capture_height"
+        android:background="@android:color/transparent"
+        android:clickable="false"
+        android:focusable="false"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent" />
 </androidx.constraintlayout.widget.ConstraintLayout>

@@ -22,8 +22,11 @@ import org.jellyfin.mobile.player.source.LocalJellyfinMediaSource
 import org.jellyfin.mobile.player.source.MediaSourceResolver
 import org.jellyfin.mobile.player.source.RemoteJellyfinMediaSource
 import org.jellyfin.sdk.api.client.ApiClient
+import org.jellyfin.sdk.api.client.extensions.itemsApi
 import org.jellyfin.sdk.api.client.extensions.videosApi
+import org.jellyfin.sdk.api.operations.ItemsApi
 import org.jellyfin.sdk.api.operations.VideosApi
+import org.jellyfin.sdk.model.api.BaseItemDto
 import org.jellyfin.sdk.model.api.MediaProtocol
 import org.jellyfin.sdk.model.api.MediaStream
 import org.jellyfin.sdk.model.api.MediaStreamProtocol
@@ -33,6 +36,7 @@ import org.jellyfin.sdk.model.serializer.toUUIDOrNull
 import org.koin.core.component.KoinComponent
 import org.koin.core.component.get
 import org.koin.core.component.inject
+import timber.log.Timber
 import java.io.File
 import java.util.UUID
 import kotlin.time.Duration
@@ -42,12 +46,17 @@ class QueueManager(
 ) : KoinComponent {
     private val apiClient: ApiClient = get()
     private val videosApi: VideosApi = apiClient.videosApi
+    private val itemsApi: ItemsApi = apiClient.itemsApi
     private val mediaSourceResolver: MediaSourceResolver by inject()
     private val deviceProfileBuilder: DeviceProfileBuilder by inject()
     private val deviceProfile = deviceProfileBuilder.getDeviceProfile()
 
     private var currentQueue: List<UUID> = emptyList()
     private var currentQueueIndex: Int = 0
+
+    private val _queueItems: MutableLiveData<List<BaseItemDto>> = MutableLiveData(emptyList())
+    val queueItems: LiveData<List<BaseItemDto>>
+        get() = _queueItems
 
     private val _currentMediaSource: MutableLiveData<JellyfinMediaSource> = MutableLiveData()
     val currentMediaSource: LiveData<JellyfinMediaSource>
@@ -64,6 +73,19 @@ class QueueManager(
     suspend fun initializePlaybackQueue(playOptions: PlayOptions): PlayerException? {
         currentQueue = playOptions.ids
         currentQueueIndex = playOptions.startIndex
+
+        // Fetch item details for the queue
+        if (currentQueue.isNotEmpty()) {
+            try {
+                val response = itemsApi.getItems(ids = currentQueue)
+                val items = response.content.items ?: emptyList()
+                // Sort items to match currentQueue order
+                val sortedItems = currentQueue.mapNotNull { id -> items.find { it.id == id } }
+                _queueItems.postValue(sortedItems)
+            } catch (e: Exception) {
+                Timber.e(e, "Failed to fetch queue items")
+            }
+        }
 
         val itemId = when {
             currentQueue.isNotEmpty() -> currentQueue[currentQueueIndex]
@@ -218,6 +240,20 @@ class QueueManager(
             )
             null -> return false
         }
+        return true
+    }
+
+    suspend fun playAtIndex(index: Int): Boolean {
+        if (index !in currentQueue.indices) return false
+
+        currentQueueIndex = index
+        val currentMediaSource = getCurrentMediaSourceOrNull() as? RemoteJellyfinMediaSource
+
+        startRemotePlayback(
+            itemId = currentQueue[currentQueueIndex],
+            mediaSourceId = null,
+            maxStreamingBitrate = currentMediaSource?.maxStreamingBitrate,
+        )
         return true
     }
 

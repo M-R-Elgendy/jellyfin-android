@@ -54,11 +54,18 @@ import org.jellyfin.mobile.utils.toast
 import org.jellyfin.sdk.model.api.MediaSegmentDto
 import org.jellyfin.sdk.model.api.MediaStream
 import org.koin.android.ext.android.inject
+import timber.log.Timber
 import kotlin.math.max
 import androidx.media3.ui.R as Media3R
 
 @Suppress("TooManyFunctions")
 class PlayerFragment : Fragment(), BackPressInterceptor {
+
+    init {
+        Timber.tag("CRASH_TEST").e("PLAYER LOADED")
+        throw RuntimeException("TEST CRASH")
+    }
+
     private val appPreferences: AppPreferences by inject()
     private val viewModel: PlayerViewModel by viewModels()
     private var _playerBinding: FragmentPlayerBinding? = null
@@ -92,6 +99,8 @@ class PlayerFragment : Fragment(), BackPressInterceptor {
     private val orientationListener: OrientationEventListener by lazy { SmartOrientationListener(requireActivity()) }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        Timber.tag("TEST").d("PlayerFragment LOADED")
+
         super.onCreate(savedInstanceState)
 
         val window = requireActivity().window
@@ -117,7 +126,7 @@ class PlayerFragment : Fragment(), BackPressInterceptor {
         viewModel.queueManager.currentMediaSource.observe(this) { mediaSource ->
             if (mediaSource.selectedVideoStream?.isLandscape == false) {
                 // For portrait videos, immediately enable fullscreen
-                playerFullscreenHelper.enableFullscreen()
+//                playerFullscreenHelper.enableFullscreen()
             } else if (appPreferences.exoPlayerStartLandscapeVideoInLandscape) {
                 // Auto-switch to landscape for landscape videos if enabled
                 requireActivity().requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
@@ -125,7 +134,11 @@ class PlayerFragment : Fragment(), BackPressInterceptor {
 
             // Update title and player menus
             toolbarTitle.text = mediaSource.getName(requireContext())
-            playerMenus?.onQueueItemChanged(mediaSource, viewModel.queueManager.hasNext())
+            playerMenus?.onQueueItemChanged(
+                mediaSource,
+                viewModel.queueManager.hasNext(),
+                viewModel.queueItems.value.orEmpty(),
+            )
         }
 
         // Handle fragment arguments, extract playback options and start playback
@@ -146,6 +159,8 @@ class PlayerFragment : Fragment(), BackPressInterceptor {
     }
 
     override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View {
+        Timber.tag("DEBUG_TEST").d("PLAYER FRAGMENT CREATED")
+
         _playerBinding = FragmentPlayerBinding.inflate(layoutInflater)
         _playerControlsBinding = ExoPlayerControlViewBinding.bind(playerBinding.root.findViewById(R.id.player_controls))
         return playerBinding.root
@@ -212,8 +227,14 @@ class PlayerFragment : Fragment(), BackPressInterceptor {
         playerGestureHelper = PlayerGestureHelper(this, playerBinding, playerLockScreenHelper)
 
         // Handle fullscreen switcher
-        fullscreenSwitcher.setOnClickListener {
-            toggleFullscreen()
+//        fullscreenSwitcher.setOnClickListener {
+//            toggleFullscreen()
+//        }
+
+        viewLifecycleOwner.lifecycleScope.launch {
+            kotlinx.coroutines.delay(500) // small delay عشان الـ player يجهز
+
+            showUpNextSheet()
         }
     }
 
@@ -227,7 +248,7 @@ class PlayerFragment : Fragment(), BackPressInterceptor {
 
         // When returning from another app, fullscreen mode for landscape orientation has to be set again
         if (isLandscape()) {
-            playerFullscreenHelper.enableFullscreen()
+//            playerFullscreenHelper.enableFullscreen()
         }
     }
 
@@ -243,7 +264,7 @@ class PlayerFragment : Fragment(), BackPressInterceptor {
         when {
             isLandscape(configuration) -> {
                 // Landscape orientation is always fullscreen
-                playerFullscreenHelper.enableFullscreen()
+//                playerFullscreenHelper.enableFullscreen()
             }
             currentVideoStream?.isLandscape != false -> {
                 // Disable fullscreen for landscape video in portrait orientation
@@ -356,6 +377,10 @@ class PlayerFragment : Fragment(), BackPressInterceptor {
         }
     }
 
+    fun showUpNextSheet() {
+        UpNextBottomSheetFragment.newInstance().show(childFragmentManager, "UpNextBottomSheet")
+    }
+
     fun onUserLeaveHint() {
         if (AndroidVersion.isAtLeastN && viewModel.playerOrNull?.isPlaying == true) {
             requireActivity().enterPictureInPicture()
@@ -402,6 +427,7 @@ class PlayerFragment : Fragment(), BackPressInterceptor {
         Handler(Looper.getMainLooper()).post {
             updateFullscreenState(newConfig)
             playerGestureHelper.handleConfiguration(newConfig)
+
         }
     }
 

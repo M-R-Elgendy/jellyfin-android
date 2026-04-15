@@ -25,7 +25,7 @@ import kotlinx.coroutines.launch
 import org.jellyfin.mobile.events.ActivityEventHandler
 import org.jellyfin.mobile.player.cast.Chromecast
 import org.jellyfin.mobile.player.cast.IChromecast
-import org.jellyfin.mobile.player.ui.PlayerFragment
+//import org.jellyfin.mobile.player.ui.PlayerFragment
 import org.jellyfin.mobile.setup.ConnectFragment
 import org.jellyfin.mobile.utils.AndroidVersion
 import org.jellyfin.mobile.utils.BackPressInterceptor
@@ -190,14 +190,14 @@ class MainActivity : AppCompatActivity() {
         return true
     }
 
-    override fun onUserLeaveHint() {
-        super.onUserLeaveHint()
-        for (fragment in supportFragmentManager.fragments) {
-            if (fragment is PlayerFragment && fragment.isVisible) {
-                fragment.onUserLeaveHint()
-            }
-        }
-    }
+//    override fun onUserLeaveHint() {
+//        super.onUserLeaveHint()
+//        for (fragment in supportFragmentManager.fragments) {
+//            if (fragment is PlayerFragment && fragment.isVisible) {
+//                fragment.onUserLeaveHint()
+//            }
+//        }
+//    }
 
     override fun onStop() {
         super.onStop()

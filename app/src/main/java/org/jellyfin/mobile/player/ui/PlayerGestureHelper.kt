@@ -3,9 +3,12 @@ package org.jellyfin.mobile.player.ui
 import android.content.res.Configuration
 import android.media.AudioManager
 import android.provider.Settings
+import android.util.Log
 import android.view.GestureDetector
 import android.view.MotionEvent
 import android.view.ScaleGestureDetector
+import android.view.VelocityTracker
+import android.view.View
 import android.view.WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_FULL
 import android.view.WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_OFF
 import android.widget.ImageView
@@ -38,6 +41,10 @@ class PlayerGestureHelper(
     private val gestureIndicatorOverlayImage: ImageView by playerBinding::gestureOverlayImage
     private val gestureIndicatorOverlayProgress: ProgressBar by playerBinding::gestureOverlayProgress
     private var isOnPressingSpeedUp = false
+
+    private val upNextSwipeCapture: View? = playerBinding.root.findViewById(R.id.up_next_swipe_capture)
+    private var upNextVelocityTracker: VelocityTracker? = null
+    private var upNextTouchStartRawY = 0f
 
     init {
         if (appPreferences.exoPlayerRememberBrightness) {
@@ -85,12 +92,34 @@ class PlayerGestureHelper(
         },
     )
 
-    /**
-     * Handles double tap to seek and brightness/volume gestures
-     */
     private val gestureDetector = GestureDetector(
         playerView.context,
         object : GestureDetector.SimpleOnGestureListener() {
+            override fun onDown(e: MotionEvent): Boolean = true
+
+            override fun onFling(
+                e1: MotionEvent?,
+                e2: MotionEvent,
+                velocityX: Float,
+                velocityY: Float
+            ): Boolean {
+                if (e1 == null) return false
+
+                // Detect upward fling starting from the bottom zone (when touches reach [playerView]).
+                if (shouldTriggerUpNextFromBottomFling(e1.y, velocityY)) {
+                    android.util.Log.d("UP_NEXT", "FLING DETECTED")
+                    try {
+                        fragment.showUpNextSheet()
+                        Log.d("UP_NEXT", "Sheet called")
+                    } catch (e: Exception) {
+                        Log.e("UP_NEXT", "ERROR", e)
+                    }
+                    return true
+                }
+
+                return super.onFling(e1, e2, velocityX, velocityY)
+            }
+
             override fun onDoubleTap(e: MotionEvent): Boolean {
                 val viewWidth = playerView.measuredWidth
                 val viewHeight = playerView.measuredHeight
@@ -246,11 +275,42 @@ class PlayerGestureHelper(
 
     init {
         @Suppress("ClickableViewAccessibility")
+        upNextSwipeCapture?.setOnTouchListener { _, event ->
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    upNextVelocityTracker?.recycle()
+                    upNextVelocityTracker = VelocityTracker.obtain().also {
+                        it.addMovement(event)
+                    }
+                    upNextTouchStartRawY = event.rawY
+                }
+                MotionEvent.ACTION_MOVE -> upNextVelocityTracker?.addMovement(event)
+                MotionEvent.ACTION_UP -> {
+                    upNextVelocityTracker?.addMovement(event)
+                    upNextVelocityTracker?.computeCurrentVelocity(1000)
+                    val vy = upNextVelocityTracker?.yVelocity ?: 0f
+                    val startYRelative = rawYToPlayerViewY(upNextTouchStartRawY)
+                    if (shouldTriggerUpNextFromBottomFling(startYRelative, vy)) {
+                        fragment.showUpNextSheet()
+                    }
+                    upNextVelocityTracker?.recycle()
+                    upNextVelocityTracker = null
+                }
+                MotionEvent.ACTION_CANCEL -> {
+                    upNextVelocityTracker?.recycle()
+                    upNextVelocityTracker = null
+                }
+            }
+            false
+        }
+
+        @Suppress("ClickableViewAccessibility")
         playerView.setOnTouchListener { _, event ->
-            if (playerView.useController) {
+            val handled = if (playerView.useController) {
                 when (event.pointerCount) {
                     1 -> gestureDetector.onTouchEvent(event)
                     2 -> zoomGestureDetector.onTouchEvent(event)
+                    else -> false
                 }
             } else {
                 unlockDetector.onTouchEvent(event)
@@ -274,7 +334,7 @@ class PlayerGestureHelper(
                 }
                 swipeGestureValueTracker = -1f
             }
-            true
+            handled
         }
     }
 
@@ -284,5 +344,33 @@ class PlayerGestureHelper(
 
     private fun updateZoomMode(enabled: Boolean) {
         playerView.resizeMode = if (enabled) AspectRatioFrameLayout.RESIZE_MODE_ZOOM else AspectRatioFrameLayout.RESIZE_MODE_FIT
+    }
+
+    /**
+     * [startYRelativeToPlayerView] is the Y coordinate of the gesture start in [playerView]'s coordinate system.
+     */
+    private fun shouldTriggerUpNextFromBottomFling(
+        startYRelativeToPlayerView: Float,
+        velocityY: Float
+    ): Boolean {
+        val viewHeight = playerView.height
+        if (viewHeight <= 0) return false
+
+        Log.d("UP_NEXT", "startY=$startYRelativeToPlayerView velocity=$velocityY")
+
+
+        val bottomZoneThreshold = viewHeight * 0.65f
+
+        val startedFromBottom = startYRelativeToPlayerView > bottomZoneThreshold
+        val fastUpSwipe = velocityY < -50f
+
+        return startedFromBottom && fastUpSwipe
+    }
+
+
+    private fun rawYToPlayerViewY(rawY: Float): Float {
+        val loc = IntArray(2)
+        playerView.getLocationOnScreen(loc)
+        return rawY - loc[1]
     }
 }
