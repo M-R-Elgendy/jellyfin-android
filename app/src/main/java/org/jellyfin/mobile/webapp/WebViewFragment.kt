@@ -256,12 +256,12 @@ class WebViewFragment : Fragment(), BackPressInterceptor, JellyfinWebChromeClien
                             QueueItem(
                                 itemId = itemId,
                                 title = obj.optString("title", ""),
-                                seriesName = obj.optString("seriesName", null),
+                                seriesName = obj.optString("seriesName", "").takeIf { it.isNotBlank() },
                                 duration = kotlin.time.Duration.ZERO.let {
                                     val ticks = obj.optLong("runTimeTicks", 0)
                                     if (ticks > 0) kotlin.time.Duration.parse("${ticks / 10_000}ms") else it
                                 },
-                                imageTag = obj.optString("imageTag", null),
+                                imageTag = obj.optString("imageTag", "").takeIf { it.isNotBlank() },
                             ),
                         )
                     }
