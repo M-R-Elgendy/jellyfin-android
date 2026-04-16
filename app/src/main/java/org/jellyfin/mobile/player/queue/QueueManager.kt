@@ -21,10 +21,15 @@ import org.jellyfin.mobile.player.source.JellyfinMediaSource
 import org.jellyfin.mobile.player.source.LocalJellyfinMediaSource
 import org.jellyfin.mobile.player.source.MediaSourceResolver
 import org.jellyfin.mobile.player.source.RemoteJellyfinMediaSource
+import org.jellyfin.mobile.player.ui.QueueItem
 import org.jellyfin.sdk.api.client.ApiClient
+import org.jellyfin.sdk.api.client.exception.ApiClientException
+import org.jellyfin.sdk.api.client.extensions.userLibraryApi
 import org.jellyfin.sdk.api.client.extensions.videosApi
 import org.jellyfin.sdk.api.operations.VideosApi
+import org.jellyfin.sdk.model.api.ImageType
 import org.jellyfin.sdk.model.api.MediaProtocol
+import org.jellyfin.sdk.model.extensions.ticks
 import org.jellyfin.sdk.model.api.MediaStream
 import org.jellyfin.sdk.model.api.MediaStreamProtocol
 import org.jellyfin.sdk.model.api.MediaStreamType
@@ -42,6 +47,7 @@ class QueueManager(
 ) : KoinComponent {
     private val apiClient: ApiClient = get()
     private val videosApi: VideosApi = apiClient.videosApi
+    private val userLibraryApi = apiClient.userLibraryApi
     private val mediaSourceResolver: MediaSourceResolver by inject()
     private val deviceProfileBuilder: DeviceProfileBuilder by inject()
     private val deviceProfile = deviceProfileBuilder.getDeviceProfile()
@@ -52,6 +58,12 @@ class QueueManager(
     private val _currentMediaSource: MutableLiveData<JellyfinMediaSource> = MutableLiveData()
     val currentMediaSource: LiveData<JellyfinMediaSource>
         get() = _currentMediaSource
+
+    private val _queueItems: MutableLiveData<List<QueueItem>> = MutableLiveData(emptyList())
+    val queueItems: LiveData<List<QueueItem>> get() = _queueItems
+
+    private val _currentIndex: MutableLiveData<Int> = MutableLiveData(0)
+    val currentIndex: LiveData<Int> get() = _currentIndex
 
     fun getCurrentMediaSourceOrNull(): JellyfinMediaSource? = currentMediaSource.value
 
@@ -88,7 +100,49 @@ class QueueManager(
             )
         }
 
+        fetchQueueItemDetails()
+
         return null
+    }
+
+    suspend fun fetchQueueItemDetails() {
+        val items = currentQueue.map { itemId ->
+            try {
+                val item = userLibraryApi.getItem(itemId).content
+                QueueItem(
+                    itemId = itemId,
+                    title = item.name.orEmpty(),
+                    seriesName = item.seriesName,
+                    duration = item.runTimeTicks?.ticks ?: Duration.ZERO,
+                    imageTag = item.imageTags?.get(ImageType.PRIMARY),
+                )
+            } catch (_: ApiClientException) {
+                QueueItem(
+                    itemId = itemId,
+                    title = itemId.toString(),
+                    seriesName = null,
+                    duration = Duration.ZERO,
+                    imageTag = null,
+                )
+            }
+        }
+        _queueItems.postValue(items)
+        _currentIndex.postValue(currentQueueIndex)
+    }
+
+    suspend fun selectQueueItem(index: Int): Boolean {
+        if (index < 0 || index >= currentQueue.size || index == currentQueueIndex) return false
+
+        val currentMediaSource = getCurrentMediaSourceOrNull() as? RemoteJellyfinMediaSource ?: return false
+        currentQueueIndex = index
+        _currentIndex.postValue(currentQueueIndex)
+
+        startRemotePlayback(
+            itemId = currentQueue[currentQueueIndex],
+            mediaSourceId = null,
+            maxStreamingBitrate = currentMediaSource.maxStreamingBitrate,
+        )
+        return true
     }
 
     private suspend fun startDownloadPlayback(
@@ -200,6 +254,7 @@ class QueueManager(
             mediaSourceId = null,
             maxStreamingBitrate = currentMediaSource.maxStreamingBitrate,
         )
+        _currentIndex.postValue(currentQueueIndex)
         return true
     }
 
@@ -218,6 +273,7 @@ class QueueManager(
             )
             null -> return false
         }
+        _currentIndex.postValue(currentQueueIndex)
         return true
     }
 

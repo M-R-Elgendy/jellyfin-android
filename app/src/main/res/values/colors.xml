@@ -21,4 +21,9 @@
     <!-- Skip Media Segment Button -->
     <color name="skip_media_segment_background">#202124</color>
     <color name="skip_media_segment_text">#DDDDDD</color>
+
+    <!-- Queue Sheet -->
+    <color name="queue_sheet_background">#E6181818</color>
+    <color name="queue_sheet_handle">#4DFFFFFF</color>
+    <color name="queue_item_duration_background">#99000000</color>
 </resources>

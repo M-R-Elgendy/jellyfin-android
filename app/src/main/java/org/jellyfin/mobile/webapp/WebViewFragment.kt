@@ -1,5 +1,6 @@
 package org.jellyfin.mobile.webapp
 
+import android.annotation.SuppressLint
 import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.content.res.Configuration
@@ -8,6 +9,7 @@ import android.net.Uri
 import android.os.Bundle
 import android.provider.Settings
 import android.view.LayoutInflater
+import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.webkit.ValueCallback
@@ -22,6 +24,7 @@ import androidx.core.view.isVisible
 import androidx.fragment.app.Fragment
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
+import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.webkit.WebViewAssetLoader.AssetsPathHandler
 import androidx.webkit.WebViewCompat
 import kotlinx.coroutines.launch
@@ -32,6 +35,18 @@ import org.jellyfin.mobile.bridge.ExternalPlayer
 import org.jellyfin.mobile.bridge.MediaSegments
 import org.jellyfin.mobile.bridge.NativeInterface
 import org.jellyfin.mobile.bridge.NativePlayer
+import org.jellyfin.mobile.player.ui.QueueItem
+import org.jellyfin.mobile.player.ui.QueueSheetAdapter
+import org.jellyfin.mobile.player.ui.QueueSheetHelper
+import org.jellyfin.sdk.api.client.ApiClient
+import org.jellyfin.sdk.api.client.extensions.itemsApi
+import org.jellyfin.sdk.api.client.extensions.userLibraryApi
+import org.jellyfin.sdk.model.api.BaseItemKind
+import org.jellyfin.sdk.model.api.ImageType
+import org.jellyfin.sdk.model.api.SortOrder
+import org.jellyfin.sdk.model.extensions.ticks
+import org.jellyfin.sdk.model.serializer.toUUIDOrNull
+import org.json.JSONObject
 import org.jellyfin.mobile.data.entity.ServerEntity
 import org.jellyfin.mobile.databinding.FragmentWebviewBinding
 import org.jellyfin.mobile.setup.ConnectFragment
@@ -49,6 +64,7 @@ import org.jellyfin.mobile.utils.isOutdated
 import org.jellyfin.mobile.utils.requestNoBatteryOptimizations
 import org.jellyfin.mobile.utils.runOnUiThread
 import org.koin.android.ext.android.inject
+import timber.log.Timber
 
 class WebViewFragment : Fragment(), BackPressInterceptor, JellyfinWebChromeClient.FileChooserListener {
     val appPreferences: AppPreferences by inject()
@@ -72,6 +88,12 @@ class WebViewFragment : Fragment(), BackPressInterceptor, JellyfinWebChromeClien
 
     // UI
     private var webViewBinding: FragmentWebviewBinding? = null
+    private var queueSheetHelper: QueueSheetHelper? = null
+    private var queueSheetAdapter: QueueSheetAdapter? = null
+    private var isWebFullscreen = false
+    private var swipeStartY = 0f
+    private var swipeStartX = 0f
+    private var lastSwipeToggleTime = 0L
 
     // External file access
     private var fileChooserActivityLauncher: ActivityResultLauncher<Intent> = registerForActivityResult(
@@ -161,6 +183,9 @@ class WebViewFragment : Fragment(), BackPressInterceptor, JellyfinWebChromeClien
             onSelectServer(error = false)
         }
 
+        setupQueueSheet()
+        setupSwipeDetection()
+
         webViewBinding!!.rotateScreenButton.setOnClickListener {
             val activity = activity ?: return@setOnClickListener
             val current = resources.configuration.orientation
@@ -180,16 +205,192 @@ class WebViewFragment : Fragment(), BackPressInterceptor, JellyfinWebChromeClien
     }
 
     override fun onInterceptBackPressed(): Boolean {
+        if (queueSheetHelper?.isOpen == true) {
+            queueSheetHelper?.close()
+            return true
+        }
         return connected && webappFunctionChannel.goBack()
     }
 
     override fun onDestroyView() {
         super.onDestroyView()
         webViewBinding = null
+        queueSheetHelper = null
+        queueSheetAdapter = null
     }
 
     fun onWebFullscreenChanged(isFullscreen: Boolean) {
+        isWebFullscreen = isFullscreen
+        Timber.d("QueueSwipeWeb: onWebFullscreenChanged(%b)", isFullscreen)
         webViewBinding?.rotateScreenButton?.isVisible = isFullscreen
+        webViewBinding?.root?.findViewById<View>(R.id.swipe_detection_zone)?.isVisible = isFullscreen
+        if (!isFullscreen) {
+            queueSheetHelper?.close()
+        }
+    }
+
+    fun onQueueDataReceived(json: String) {
+        Timber.d("QueueSwipeWeb: onQueueDataReceived, json=%s", json.take(500))
+        try {
+            val data = JSONObject(json)
+            val itemsArray = data.optJSONArray("items") ?: return
+            val currentIndex = data.optInt("currentIndex", 0)
+
+            if (itemsArray.length() > 0) {
+                val items = (0 until itemsArray.length()).map { i ->
+                    val obj = itemsArray.getJSONObject(i)
+                    QueueItem(
+                        itemId = obj.getString("itemId").toUUIDOrNull() ?: return,
+                        title = obj.optString("title", ""),
+                        seriesName = obj.optString("seriesName", null),
+                        duration = kotlin.time.Duration.ZERO.let {
+                            val ticks = obj.optLong("runTimeTicks", 0)
+                            if (ticks > 0) kotlin.time.Duration.parse("${ticks / 10_000}ms") else it
+                        },
+                        imageTag = obj.optString("imageTag", null),
+                    )
+                }
+                showQueueItems(items, currentIndex)
+            } else {
+                val currentItemId = data.optString("currentItemId", "").toUUIDOrNull()
+                val parentId = data.optString("parentId", "").toUUIDOrNull()
+                Timber.d("QueueSwipeWeb: empty queue, fallback currentItemId=%s, parentId=%s", currentItemId, parentId)
+
+                if (parentId != null) {
+                    fetchSiblingItems(parentId, currentItemId)
+                } else if (currentItemId != null) {
+                    fetchCurrentItemAndSiblings(currentItemId)
+                } else {
+                    showQueueItems(emptyList(), 0)
+                }
+            }
+        } catch (e: Exception) {
+            Timber.e(e, "QueueSwipeWeb: error parsing queue data")
+        }
+    }
+
+    private fun showQueueItems(items: List<QueueItem>, currentIndex: Int) {
+        queueSheetAdapter?.submitList(items)
+        queueSheetAdapter?.currentIndex = currentIndex
+        queueSheetHelper?.updateQueueState(items.isNotEmpty())
+        if (queueSheetHelper?.isOpen != true) {
+            queueSheetHelper?.open(currentIndex)
+        }
+    }
+
+    private fun fetchCurrentItemAndSiblings(currentItemId: java.util.UUID) {
+        lifecycleScope.launch {
+            try {
+                val apiClient: ApiClient by inject()
+                val item = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    apiClient.userLibraryApi.getItem(currentItemId).content
+                }
+                val parentId = item.parentId
+                Timber.d("QueueSwipeWeb: fetched item parentId=%s", parentId)
+                if (parentId != null) {
+                    fetchSiblingItems(parentId, currentItemId)
+                } else {
+                    val singleItem = QueueItem(
+                        itemId = currentItemId,
+                        title = item.name.orEmpty(),
+                        seriesName = item.seriesName,
+                        duration = item.runTimeTicks?.ticks ?: kotlin.time.Duration.ZERO,
+                        imageTag = item.imageTags?.get(ImageType.PRIMARY),
+                    )
+                    showQueueItems(listOf(singleItem), 0)
+                }
+            } catch (e: Exception) {
+                Timber.e(e, "QueueSwipeWeb: failed to fetch current item")
+                showQueueItems(emptyList(), 0)
+            }
+        }
+    }
+
+    private fun fetchSiblingItems(parentId: java.util.UUID, currentItemId: java.util.UUID?) {
+        lifecycleScope.launch {
+            try {
+                val apiClient: ApiClient by inject()
+                val response = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    apiClient.itemsApi.getItems(
+                        parentId = parentId,
+                        includeItemTypes = listOf(BaseItemKind.MOVIE, BaseItemKind.EPISODE, BaseItemKind.VIDEO, BaseItemKind.MUSIC_VIDEO, BaseItemKind.TRAILER),
+                        sortBy = listOf(org.jellyfin.sdk.model.api.ItemSortBy.SORT_NAME),
+                        sortOrder = listOf(SortOrder.ASCENDING),
+                        recursive = true,
+                        limit = 100,
+                    ).content
+                }
+                val resultItems = response.items.orEmpty()
+                Timber.d("QueueSwipeWeb: fetched %d sibling items from parentId=%s", resultItems.size, parentId)
+
+                var currentIndex = 0
+                val items = resultItems.mapIndexed { index, dto ->
+                    if (dto.id == currentItemId) currentIndex = index
+                    QueueItem(
+                        itemId = dto.id,
+                        title = dto.name.orEmpty(),
+                        seriesName = dto.seriesName,
+                        duration = dto.runTimeTicks?.ticks ?: kotlin.time.Duration.ZERO,
+                        imageTag = dto.imageTags?.get(ImageType.PRIMARY),
+                    )
+                }
+                showQueueItems(items, currentIndex)
+            } catch (e: Exception) {
+                Timber.e(e, "QueueSwipeWeb: failed to fetch sibling items")
+                showQueueItems(emptyList(), 0)
+            }
+        }
+    }
+
+    private fun setupQueueSheet() {
+        val binding = webViewBinding ?: return
+        val queueSheetRoot = binding.root.findViewById<View>(R.id.queue_sheet_root) ?: return
+        val apiClient: ApiClient by inject()
+
+        queueSheetAdapter = QueueSheetAdapter(apiClient) { index ->
+            val items = queueSheetAdapter?.currentList ?: return@QueueSheetAdapter
+            val item = items.getOrNull(index) ?: return@QueueSheetAdapter
+            webappFunctionChannel.selectQueueItem(item.itemId.toString())
+            queueSheetHelper?.close()
+        }
+        val recyclerView = queueSheetRoot.findViewById<androidx.recyclerview.widget.RecyclerView>(R.id.queue_recycler_view)
+        recyclerView.layoutManager = LinearLayoutManager(requireContext())
+        recyclerView.adapter = queueSheetAdapter
+
+        queueSheetHelper = QueueSheetHelper(queueSheetRoot) {}
+    }
+
+    @SuppressLint("ClickableViewAccessibility")
+    private fun setupSwipeDetection() {
+        val swipeZone = webViewBinding?.root?.findViewById<View>(R.id.swipe_detection_zone) ?: return
+        Timber.d("QueueSwipeWeb: setupSwipeDetection, swipeZone=%s, visible=%b", swipeZone, swipeZone.isVisible)
+        swipeZone.setOnTouchListener { _, event ->
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    swipeStartX = event.rawX
+                    swipeStartY = event.rawY
+                    Timber.d("QueueSwipeWeb: ACTION_DOWN at (%.0f, %.0f)", event.rawX, event.rawY)
+                    true
+                }
+                MotionEvent.ACTION_UP -> {
+                    val isLandscape = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+                    Timber.d("QueueSwipeWeb: ACTION_UP at (%.0f, %.0f), isLandscape=%b, isWebFullscreen=%b", event.rawX, event.rawY, isLandscape, isWebFullscreen)
+                    if (isLandscape && isWebFullscreen) {
+                        val deltaY = swipeStartY - event.rawY
+                        val deltaX = kotlin.math.abs(swipeStartX - event.rawX)
+                        val now = System.currentTimeMillis()
+                        Timber.d("QueueSwipeWeb: deltaY=%.0f, deltaX=%.0f (need >=%.0f, <=%.0f)", deltaY, deltaX, SWIPE_UP_MIN_DISTANCE, SWIPE_UP_MAX_DRIFT)
+                        if (deltaY >= SWIPE_UP_MIN_DISTANCE && deltaX <= SWIPE_UP_MAX_DRIFT && now - lastSwipeToggleTime > SWIPE_DEBOUNCE_MS) {
+                            lastSwipeToggleTime = now
+                            Timber.d("QueueSwipeWeb: VALID swipe-up, requesting queue data")
+                            webappFunctionChannel.requestQueueData()
+                        }
+                    }
+                    true
+                }
+                else -> false
+            }
+        }
     }
 
     private fun WebView.initialize() {
@@ -277,5 +478,11 @@ class WebViewFragment : Fragment(), BackPressInterceptor, JellyfinWebChromeClien
     override fun onShowFileChooser(intent: Intent, filePathCallback: ValueCallback<Array<Uri>>) {
         fileChooserCallback = filePathCallback
         fileChooserActivityLauncher.launch(intent)
+    }
+
+    companion object {
+        private const val SWIPE_UP_MIN_DISTANCE = 100f
+        private const val SWIPE_UP_MAX_DRIFT = 400f
+        private const val SWIPE_DEBOUNCE_MS = 300L
     }
 }

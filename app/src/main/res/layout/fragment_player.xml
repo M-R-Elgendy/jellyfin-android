@@ -102,4 +102,10 @@
             android:textSize="18sp"
             tools:visibility="visible"/>
     </FrameLayout>
+
+    <include
+        layout="@layout/queue_sheet"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:layout_gravity="bottom" />
 </FrameLayout>

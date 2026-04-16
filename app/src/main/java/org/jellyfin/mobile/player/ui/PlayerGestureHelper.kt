@@ -24,6 +24,7 @@ import org.jellyfin.mobile.utils.brightness
 import org.jellyfin.mobile.utils.dip
 import org.koin.core.component.KoinComponent
 import org.koin.core.component.inject
+import timber.log.Timber
 import kotlin.math.abs
 
 class PlayerGestureHelper(
@@ -38,6 +39,9 @@ class PlayerGestureHelper(
     private val gestureIndicatorOverlayImage: ImageView by playerBinding::gestureOverlayImage
     private val gestureIndicatorOverlayProgress: ProgressBar by playerBinding::gestureOverlayProgress
     private var isOnPressingSpeedUp = false
+    private var swipeStartX = 0f
+    private var swipeStartY = 0f
+    private var scrollConsumed = false
 
     init {
         if (appPreferences.exoPlayerRememberBrightness) {
@@ -218,6 +222,7 @@ class PlayerGestureHelper(
                 }
 
                 gestureIndicatorOverlayLayout.isVisible = true
+                scrollConsumed = true
                 return true
             }
         },
@@ -255,26 +260,50 @@ class PlayerGestureHelper(
             } else {
                 unlockDetector.onTouchEvent(event)
             }
-            if (event.action == MotionEvent.ACTION_UP) {
-                if (isOnPressingSpeedUp) {
-                    isOnPressingSpeedUp = false
-                    with(fragment) {
-                        onPressSpeedUp(false)
-                    }
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    swipeStartX = event.x
+                    swipeStartY = event.y
+                    scrollConsumed = false
+                    Timber.d("QueueSwipe: ACTION_DOWN at (%.0f, %.0f)", event.x, event.y)
                 }
-                // Hide gesture indicator after timeout, if shown
-                gestureIndicatorOverlayLayout.apply {
-                    if (isVisible) {
-                        removeCallbacks(hideGestureIndicatorOverlayAction)
-                        postDelayed(
-                            hideGestureIndicatorOverlayAction,
-                            Constants.DEFAULT_CENTER_OVERLAY_TIMEOUT_MS.toLong(),
-                        )
+                MotionEvent.ACTION_UP -> {
+                    Timber.d("QueueSwipe: ACTION_UP at (%.0f, %.0f), scrollConsumed=%b, isLandscape=%b", event.x, event.y, scrollConsumed, fragment.isLandscape())
+                    if (isOnPressingSpeedUp) {
+                        isOnPressingSpeedUp = false
+                        with(fragment) {
+                            onPressSpeedUp(false)
+                        }
                     }
+                    // Hide gesture indicator after timeout, if shown
+                    gestureIndicatorOverlayLayout.apply {
+                        if (isVisible) {
+                            removeCallbacks(hideGestureIndicatorOverlayAction)
+                            postDelayed(
+                                hideGestureIndicatorOverlayAction,
+                                Constants.DEFAULT_CENTER_OVERLAY_TIMEOUT_MS.toLong(),
+                            )
+                        }
+                    }
+
+                    if (!scrollConsumed && fragment.isLandscape()) {
+                        checkSwipeUpGesture(event.x, event.y)
+                    }
+
+                    swipeGestureValueTracker = -1f
                 }
-                swipeGestureValueTracker = -1f
             }
             true
+        }
+    }
+
+    private fun checkSwipeUpGesture(endX: Float, endY: Float) {
+        val deltaY = swipeStartY - endY
+        val deltaX = abs(swipeStartX - endX)
+        Timber.d("QueueSwipe: check deltaY=%.0f, deltaX=%.0f (need deltaY>=%.0f, deltaX<=%.0f)", deltaY, deltaX, SWIPE_UP_MIN_DISTANCE, SWIPE_UP_MAX_HORIZONTAL_DRIFT)
+        if (deltaY >= SWIPE_UP_MIN_DISTANCE && deltaX <= SWIPE_UP_MAX_HORIZONTAL_DRIFT) {
+            Timber.d("QueueSwipe: VALID swipe-up detected, calling toggleQueueSheet()")
+            fragment.toggleQueueSheet()
         }
     }
 
@@ -284,5 +313,10 @@ class PlayerGestureHelper(
 
     private fun updateZoomMode(enabled: Boolean) {
         playerView.resizeMode = if (enabled) AspectRatioFrameLayout.RESIZE_MODE_ZOOM else AspectRatioFrameLayout.RESIZE_MODE_FIT
+    }
+
+    companion object {
+        private const val SWIPE_UP_MIN_DISTANCE = 100f
+        private const val SWIPE_UP_MAX_HORIZONTAL_DRIFT = 400f
     }
 }

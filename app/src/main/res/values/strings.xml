@@ -141,4 +141,10 @@
     <string name="downloading_desc">Downloading %1$d titles</string>
     <string name="downloaded">Downloaded %1$s</string>
     <string name="special_episode">Special</string>
+
+    <!-- Queue Sheet -->
+    <string name="queue_sheet_title">Playing queue</string>
+    <string name="queue_sheet_close">Close queue</string>
+    <string name="queue_sheet_empty">No videos in queue</string>
+    <string name="queue_item_now_playing">Now playing</string>
 </resources>

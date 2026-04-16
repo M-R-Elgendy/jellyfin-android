@@ -18,4 +18,5 @@ sealed class ActivityEvent {
     data object SelectServer : ActivityEvent()
     data object ExitApp : ActivityEvent()
     data object OpenDownloads : ActivityEvent()
+    class QueueDataReceived(val json: String) : ActivityEvent()
 }

@@ -28,9 +28,11 @@ import androidx.fragment.app.viewModels
 import androidx.lifecycle.lifecycleScope
 import androidx.media3.common.Player
 import androidx.media3.ui.PlayerView
+import androidx.recyclerview.widget.LinearLayoutManager
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import org.jellyfin.mobile.R
+import org.jellyfin.sdk.api.client.ApiClient
 import org.jellyfin.mobile.app.AppPreferences
 import org.jellyfin.mobile.databinding.ExoPlayerControlViewBinding
 import org.jellyfin.mobile.databinding.FragmentPlayerBinding
@@ -73,6 +75,8 @@ class PlayerFragment : Fragment(), BackPressInterceptor {
     private val toolbarTitle: AppCompatTextView get() = playerControlsBinding.toolbarTitle
     private val fullscreenSwitcher: ImageButton get() = playerControlsBinding.fullscreenSwitcher
     private var playerMenus: PlayerMenus? = null
+    private var queueSheetHelper: QueueSheetHelper? = null
+    private var queueSheetAdapter: QueueSheetAdapter? = null
 
     private lateinit var playerFullscreenHelper: PlayerFullscreenHelper
     lateinit var playerLockScreenHelper: PlayerLockScreenHelper
@@ -215,6 +219,31 @@ class PlayerFragment : Fragment(), BackPressInterceptor {
         fullscreenSwitcher.setOnClickListener {
             toggleFullscreen()
         }
+
+        // Setup queue sheet
+        val queueSheetRoot = playerBinding.root.findViewById<View>(R.id.queue_sheet_root)
+        if (queueSheetRoot != null) {
+            val apiClient: ApiClient by inject()
+            queueSheetAdapter = QueueSheetAdapter(apiClient) { index ->
+                lifecycleScope.launch {
+                    viewModel.queueManager.selectQueueItem(index)
+                }
+                queueSheetHelper?.close()
+            }
+            val recyclerView = queueSheetRoot.findViewById<androidx.recyclerview.widget.RecyclerView>(R.id.queue_recycler_view)
+            recyclerView.layoutManager = LinearLayoutManager(requireContext())
+            recyclerView.adapter = queueSheetAdapter
+
+            queueSheetHelper = QueueSheetHelper(queueSheetRoot) {}
+
+            viewModel.queueManager.queueItems.observe(viewLifecycleOwner) { items ->
+                queueSheetAdapter?.submitList(items)
+                queueSheetHelper?.updateQueueState(items.isNotEmpty())
+            }
+            viewModel.queueManager.currentIndex.observe(viewLifecycleOwner) { index ->
+                queueSheetAdapter?.currentIndex = index
+            }
+        }
     }
 
     override fun onStart() {
@@ -274,6 +303,12 @@ class PlayerFragment : Fragment(), BackPressInterceptor {
         }
     }
 
+
+    fun toggleQueueSheet() {
+        val currentIdx = viewModel.queueManager.currentIndex.value ?: 0
+        timber.log.Timber.d("QueueSheet: toggleQueueSheet called, currentIdx=%d, helper=%s", currentIdx, queueSheetHelper)
+        queueSheetHelper?.toggle(currentIdx)
+    }
 
     fun rotateScreen() {
         val activity = requireActivity()
@@ -408,11 +443,20 @@ class PlayerFragment : Fragment(), BackPressInterceptor {
         }
     }
 
+    override fun onInterceptBackPressed(): Boolean {
+        if (queueSheetHelper?.isOpen == true) {
+            queueSheetHelper?.close()
+            return true
+        }
+        return false
+    }
+
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
         Handler(Looper.getMainLooper()).post {
             updateFullscreenState(newConfig)
             playerGestureHelper.handleConfiguration(newConfig)
+            queueSheetHelper?.handleConfiguration(newConfig)
         }
     }
 
@@ -430,6 +474,8 @@ class PlayerFragment : Fragment(), BackPressInterceptor {
         _playerBinding = null
         _playerControlsBinding = null
         playerMenus = null
+        queueSheetHelper = null
+        queueSheetAdapter = null
     }
 
     override fun onDestroy() {

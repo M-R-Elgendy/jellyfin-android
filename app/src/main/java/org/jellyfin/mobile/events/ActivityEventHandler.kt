@@ -131,6 +131,10 @@ class ActivityEventHandler(
                     finish()
                 }
             }
+            is ActivityEvent.QueueDataReceived -> {
+                val webViewFragment = supportFragmentManager.findFragmentById(R.id.fragment_container) as? WebViewFragment
+                webViewFragment?.onQueueDataReceived(event.json)
+            }
         }
     }
 

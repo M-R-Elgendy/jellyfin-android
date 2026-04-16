@@ -78,6 +78,11 @@ class NativeInterface(private val context: Context) : KoinComponent {
     }
 
     @JavascriptInterface
+    fun onQueueDataReceived(json: String) {
+        emitEvent(ActivityEvent.QueueDataReceived(json))
+    }
+
+    @JavascriptInterface
     fun openUrl(uri: String): Boolean {
         emitEvent(ActivityEvent.OpenUrl(uri))
         return true
