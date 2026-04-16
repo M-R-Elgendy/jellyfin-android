@@ -104,7 +104,7 @@
     </FrameLayout>
 
     <include
-        layout="@layout/queue_sheet"
+        layout="@layout/queue_sheet_player"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
         android:layout_gravity="bottom" />

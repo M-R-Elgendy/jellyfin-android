@@ -43,11 +43,12 @@
         android:layout_height="match_parent"
         android:visibility="invisible" />
 
+    <!-- Narrow strip: full-width swipe zone sat under native player letterboxing and stole bottom touches. -->
     <View
         android:id="@+id/swipe_detection_zone"
-        android:layout_width="match_parent"
+        android:layout_width="200dp"
         android:layout_height="80dp"
-        android:layout_gravity="bottom"
+        android:layout_gravity="bottom|center_horizontal"
         android:visibility="gone" />
 
     <include
@@ -61,7 +62,7 @@
         android:layout_width="48dp"
         android:layout_height="48dp"
         android:layout_gravity="bottom|end"
-        android:layout_marginStart="16dp"
+        android:layout_marginEnd="16dp"
         android:layout_marginBottom="16dp"
         android:background="@drawable/ripple_background_circular"
         android:padding="8dp"

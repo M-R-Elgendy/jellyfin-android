@@ -6,6 +6,7 @@ import android.provider.Settings
 import android.view.GestureDetector
 import android.view.MotionEvent
 import android.view.ScaleGestureDetector
+import android.view.View
 import android.view.WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_FULL
 import android.view.WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_OFF
 import android.widget.ImageView
@@ -265,9 +266,30 @@ class PlayerGestureHelper(
                     swipeStartX = event.x
                     swipeStartY = event.y
                     scrollConsumed = false
+                    Timber.tag("PlayerTouch").d(
+                        "ACTION_DOWN (%.0f,%.0f) useController=%b controllerFullyVisible=%b " +
+                            "playerView=%dx%d nativeQueueVisible=%b (listener returns true; see ViewGroup dispatch)",
+                        event.x,
+                        event.y,
+                        playerView.useController,
+                        playerView.isControllerFullyVisible,
+                        playerView.width,
+                        playerView.height,
+                        runCatching {
+                            fragment.requireView().findViewById<View>(R.id.player_queue_sheet_root).isVisible
+                        }.getOrDefault(false),
+                    )
                     Timber.d("QueueSwipe: ACTION_DOWN at (%.0f, %.0f)", event.x, event.y)
                 }
                 MotionEvent.ACTION_UP -> {
+                    Timber.tag("PlayerTouch").d(
+                        "ACTION_UP (%.0f,%.0f) scrollConsumed=%b isLandscape=%b controllerFullyVisible=%b",
+                        event.x,
+                        event.y,
+                        scrollConsumed,
+                        fragment.isLandscape(),
+                        playerView.isControllerFullyVisible,
+                    )
                     Timber.d("QueueSwipe: ACTION_UP at (%.0f, %.0f), scrollConsumed=%b, isLandscape=%b", event.x, event.y, scrollConsumed, fragment.isLandscape())
                     if (isOnPressingSpeedUp) {
                         isOnPressingSpeedUp = false

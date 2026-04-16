@@ -171,6 +171,8 @@
         app:barrierDirection="top"
         app:constraint_referenced_ids="audio_streams_button,subtitles_button,fullscreen_switcher" />
 
+    <!-- Bottom bar: one horizontal chain (spread_inside) so icons never overlap on narrow screens;
+         fullscreen is anchored between info and parent end instead of floating over the row. -->
     <androidx.appcompat.widget.AppCompatImageButton
         android:id="@+id/lock_screen_button"
         android:layout_width="@dimen/exo_bottom_controls_size"
@@ -181,6 +183,8 @@
         android:padding="@dimen/exo_bottom_controls_padding"
         android:src="@drawable/ic_screen_lock_white_24dp"
         app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toStartOf="@id/audio_streams_button"
+        app:layout_constraintHorizontal_chainStyle="spread_inside"
         app:layout_constraintStart_toStartOf="parent" />
 
     <androidx.appcompat.widget.AppCompatImageButton
@@ -192,6 +196,7 @@
         android:padding="@dimen/exo_bottom_controls_padding"
         android:src="@drawable/ic_music_note_white_24dp"
         app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toStartOf="@id/subtitles_button"
         app:layout_constraintStart_toEndOf="@id/lock_screen_button" />
 
     <androidx.appcompat.widget.AppCompatImageButton
@@ -203,6 +208,7 @@
         android:padding="@dimen/exo_bottom_controls_padding"
         android:src="@drawable/ic_subtitles_stateful_24dp"
         app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toStartOf="@id/speed_button"
         app:layout_constraintStart_toEndOf="@id/audio_streams_button" />
 
     <androidx.appcompat.widget.AppCompatImageButton
@@ -214,6 +220,7 @@
         android:padding="@dimen/exo_bottom_controls_padding"
         android:src="@drawable/ic_slow_motion_video_white_24dp"
         app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toStartOf="@id/quality_button"
         app:layout_constraintStart_toEndOf="@id/subtitles_button" />
 
     <androidx.appcompat.widget.AppCompatImageButton
@@ -225,9 +232,10 @@
         android:padding="@dimen/exo_bottom_controls_padding"
         android:src="@drawable/ic_settings_white_24dp"
         app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toStartOf="@id/rotate_screen_button"
         app:layout_constraintStart_toEndOf="@id/speed_button" />
 
-    <!-- <androidx.appcompat.widget.AppCompatImageButton
+    <androidx.appcompat.widget.AppCompatImageButton
         android:id="@+id/rotate_screen_button"
         android:layout_width="@dimen/exo_bottom_controls_size"
         android:layout_height="@dimen/exo_bottom_controls_size"
@@ -236,22 +244,8 @@
         android:padding="@dimen/exo_bottom_controls_padding"
         android:src="@drawable/ic_screen_rotation_white_24dp"
         app:layout_constraintBottom_toBottomOf="parent"
-        app:layout_constraintStart_toEndOf="@id/quality_button" /> -->
-
-        <androidx.appcompat.widget.AppCompatImageButton
-        android:id="@+id/rotate_screen_button"
-        android:layout_width="48dp"
-        android:layout_height="48dp"
-        android:layout_gravity="bottom|end"
-        android:layout_marginStart="16dp"
-        android:layout_marginBottom="16dp"
-        android:background="@drawable/ripple_background_circular"
-        android:padding="8dp"
-        android:src="@drawable/ic_screen_rotation_white_24dp"
-        app:layout_constraintBottom_toBottomOf="parent"
-        app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintStart_toStartOf="parent"
-        android:visibility="gone" />
+        app:layout_constraintEnd_toStartOf="@id/decoder_button"
+        app:layout_constraintStart_toEndOf="@id/quality_button" />
 
     <androidx.appcompat.widget.AppCompatImageButton
         android:id="@+id/decoder_button"
@@ -262,6 +256,7 @@
         android:padding="@dimen/exo_bottom_controls_padding"
         android:src="@drawable/ic_video_settings_white_24dp"
         app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toStartOf="@id/info_button"
         app:layout_constraintStart_toEndOf="@id/rotate_screen_button" />
 
     <androidx.appcompat.widget.AppCompatImageButton
@@ -273,6 +268,7 @@
         android:padding="@dimen/exo_bottom_controls_padding"
         android:src="@drawable/ic_info_white_24dp"
         app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toStartOf="@id/fullscreen_switcher"
         app:layout_constraintStart_toEndOf="@id/decoder_button" />
 
     <androidx.appcompat.widget.AppCompatImageButton
@@ -285,5 +281,6 @@
         android:padding="@dimen/exo_bottom_controls_padding"
         android:src="@drawable/ic_fullscreen_enter_white_32dp"
         app:layout_constraintBottom_toBottomOf="parent"
-        app:layout_constraintEnd_toEndOf="parent" />
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toEndOf="@id/info_button" />
 </androidx.constraintlayout.widget.ConstraintLayout>

@@ -53,10 +53,12 @@ import org.jellyfin.mobile.utils.extensions.getParcelableCompat
 import org.jellyfin.mobile.utils.extensions.isLandscape
 import org.jellyfin.mobile.utils.extensions.keepScreenOn
 import org.jellyfin.mobile.utils.toast
+import org.jellyfin.mobile.webapp.WebViewFragment
 import org.jellyfin.sdk.model.api.MediaSegmentDto
 import org.jellyfin.sdk.model.api.MediaStream
 import org.koin.android.ext.android.inject
 import kotlin.math.max
+import timber.log.Timber
 import androidx.media3.ui.R as Media3R
 
 @Suppress("TooManyFunctions")
@@ -221,7 +223,7 @@ class PlayerFragment : Fragment(), BackPressInterceptor {
         }
 
         // Setup queue sheet
-        val queueSheetRoot = playerBinding.root.findViewById<View>(R.id.queue_sheet_root)
+        val queueSheetRoot = playerBinding.root.findViewById<View>(R.id.player_queue_sheet_root)
         if (queueSheetRoot != null) {
             val apiClient: ApiClient by inject()
             queueSheetAdapter = QueueSheetAdapter(apiClient) { index ->
@@ -306,8 +308,26 @@ class PlayerFragment : Fragment(), BackPressInterceptor {
 
     fun toggleQueueSheet() {
         val currentIdx = viewModel.queueManager.currentIndex.value ?: 0
-        timber.log.Timber.d("QueueSheet: toggleQueueSheet called, currentIdx=%d, helper=%s", currentIdx, queueSheetHelper)
+        val sheetRoot = playerBinding.root.findViewById<View>(R.id.player_queue_sheet_root)
+        Timber.tag("QueueSheet").d(
+            "toggleQueueSheet fragment currentIdx=%d helperNull=%b sheetNull=%b " +
+                "sheetVisible=%b sheetTy=%.1f sheetZ=%.1f overlayVisible=%b",
+            currentIdx,
+            queueSheetHelper == null,
+            sheetRoot == null,
+            sheetRoot?.isVisible,
+            sheetRoot?.translationY ?: Float.NaN,
+            sheetRoot?.z ?: Float.NaN,
+            playerOverlay.isVisible,
+        )
         queueSheetHelper?.toggle(currentIdx)
+        sheetRoot?.let { root ->
+            Timber.tag("QueueSheet").d(
+                "toggleQueueSheet after toggle sheetVisible=%b isOpen=%b",
+                root.isVisible,
+                queueSheetHelper?.isOpen,
+            )
+        }
     }
 
     fun rotateScreen() {
@@ -466,6 +486,10 @@ class PlayerFragment : Fragment(), BackPressInterceptor {
     }
 
     override fun onDestroyView() {
+        requireActivity().supportFragmentManager.fragments
+            .filterIsInstance<WebViewFragment>()
+            .firstOrNull()
+            ?.setNativePlayerOverlaySuppression(false)
         super.onDestroyView()
         // Detach player from PlayerView
         playerView.player = null

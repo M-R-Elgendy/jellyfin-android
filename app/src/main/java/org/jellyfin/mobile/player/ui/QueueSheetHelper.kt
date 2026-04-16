@@ -1,14 +1,19 @@
 package org.jellyfin.mobile.player.ui
 
+import android.animation.Animator
 import android.animation.ObjectAnimator
 import android.annotation.SuppressLint
 import android.content.res.Configuration
 import android.view.GestureDetector
+import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
+import android.view.ViewGroup
 import android.view.animation.DecelerateInterpolator
+import android.widget.FrameLayout
 import android.widget.ImageButton
 import android.widget.TextView
+import androidx.coordinatorlayout.widget.CoordinatorLayout
 import androidx.core.view.isVisible
 import androidx.recyclerview.widget.RecyclerView
 import org.jellyfin.mobile.R
@@ -22,31 +27,59 @@ class QueueSheetHelper(
         private set
 
     private var lastToggleTime: Long = 0L
+    private var translationAnimator: ObjectAnimator? = null
 
     private val recyclerView: RecyclerView = sheetRoot.findViewById(R.id.queue_recycler_view)
     private val emptyText: TextView = sheetRoot.findViewById(R.id.queue_empty_text)
     private val closeButton: ImageButton = sheetRoot.findViewById(R.id.queue_close_button)
 
     init {
-        closeButton.setOnClickListener { close() }
+        closeButton.setOnClickListener {
+            Timber.d("QueueSheet: close button clicked")
+            close()
+        }
         setupDragToDismiss()
+        logSheetState("helper-init")
     }
 
     fun open(scrollToIndex: Int = -1) {
-        Timber.d("QueueSheet: open() called, isOpen=%b, canToggle=%b", isOpen, canToggle())
-        if (isOpen || !canToggle()) return
+        Timber.d(
+            "QueueSheet: open() entry scrollToIndex=%d isOpen=%b canToggle=%b msSinceToggle=%d",
+            scrollToIndex,
+            isOpen,
+            canToggle(),
+            System.currentTimeMillis() - lastToggleTime,
+        )
+        logSheetState("open-before-guards")
+        if (isOpen || !canToggle()) {
+            Timber.d("QueueSheet: open() aborted (already open or debounced)")
+            return
+        }
         isOpen = true
         lastToggleTime = System.currentTimeMillis()
 
+        cancelTranslationAnimator()
         updateSheetHeight()
         sheetRoot.isVisible = true
         sheetRoot.translationY = sheetRoot.height.toFloat().coerceAtLeast(sheetRoot.resources.displayMetrics.heightPixels.toFloat())
 
-        ObjectAnimator.ofFloat(sheetRoot, View.TRANSLATION_Y, sheetRoot.translationY, 0f).apply {
+        translationAnimator = ObjectAnimator.ofFloat(sheetRoot, View.TRANSLATION_Y, sheetRoot.translationY, 0f).apply {
             duration = ANIMATION_DURATION_MS
             interpolator = DecelerateInterpolator()
+            addListener(object : android.animation.AnimatorListenerAdapter() {
+                override fun onAnimationEnd(animation: Animator) {
+                    Timber.d("QueueSheet: open translation animator onAnimationEnd")
+                    translationAnimator = null
+                }
+
+                override fun onAnimationCancel(animation: Animator) {
+                    Timber.d("QueueSheet: open translation animator onAnimationCancel")
+                    translationAnimator = null
+                }
+            })
             start()
         }
+        logSheetState("open-after-start")
 
         if (scrollToIndex >= 0) {
             recyclerView.post { recyclerView.scrollToPosition(scrollToIndex) }
@@ -54,18 +87,48 @@ class QueueSheetHelper(
     }
 
     fun close() {
-        if (!isOpen || !canToggle()) return
+        Timber.d("QueueSheet: close() entry isOpen=%b sheetRoot.isVisible=%b", isOpen, sheetRoot.isVisible)
+        logSheetState("close-entry")
+        if (!sheetRoot.isVisible) {
+            Timber.d("QueueSheet: close() no-op (sheet not visible); syncing isOpen=false")
+            isOpen = false
+            return
+        }
+
         isOpen = false
         lastToggleTime = System.currentTimeMillis()
 
+        cancelTranslationAnimator()
+
         val targetY = sheetRoot.height.toFloat()
-        ObjectAnimator.ofFloat(sheetRoot, View.TRANSLATION_Y, 0f, targetY).apply {
+        if (targetY <= 0f) {
+            Timber.d("QueueSheet: close() immediate hide (targetY<=0)")
+            sheetRoot.isVisible = false
+            onClose()
+            logSheetState("close-immediate-hide")
+            return
+        }
+
+        val startY = sheetRoot.translationY
+        Timber.d("QueueSheet: close() animating translationY %.1f -> %.1f", startY, targetY)
+        translationAnimator = ObjectAnimator.ofFloat(sheetRoot, View.TRANSLATION_Y, startY, targetY).apply {
             duration = ANIMATION_DURATION_MS
             interpolator = DecelerateInterpolator()
             addListener(object : android.animation.AnimatorListenerAdapter() {
-                override fun onAnimationEnd(animation: android.animation.Animator) {
+                override fun onAnimationEnd(animation: Animator) {
+                    Timber.d("QueueSheet: close translation onAnimationEnd -> GONE + onClose()")
+                    translationAnimator = null
                     sheetRoot.isVisible = false
                     onClose()
+                    logSheetState("close-anim-end")
+                }
+
+                override fun onAnimationCancel(animation: Animator) {
+                    Timber.d("QueueSheet: close translation onAnimationCancel -> GONE + onClose()")
+                    translationAnimator = null
+                    sheetRoot.isVisible = false
+                    onClose()
+                    logSheetState("close-anim-cancel")
                 }
             })
             start()
@@ -73,17 +136,22 @@ class QueueSheetHelper(
     }
 
     fun toggle(scrollToIndex: Int = -1) {
-        Timber.d("QueueSheet: toggle() called, isOpen=%b", isOpen)
+        Timber.d("QueueSheet: toggle() isOpen=%b -> will %s", isOpen, if (isOpen) "close" else "open")
+        logSheetState("toggle-entry")
         if (isOpen) close() else open(scrollToIndex)
+        logSheetState("toggle-exit")
     }
 
     fun handleConfiguration(newConfig: Configuration) {
+        Timber.d("QueueSheet: handleConfiguration isOpen=%b newOrientation=%d", isOpen, newConfig.orientation)
         if (isOpen) {
             updateSheetHeight()
+            logSheetState("handleConfiguration-after-resize")
         }
     }
 
     fun updateQueueState(hasItems: Boolean) {
+        Timber.d("QueueSheet: updateQueueState hasItems=%b", hasItems)
         emptyText.isVisible = !hasItems
         recyclerView.isVisible = hasItems
     }
@@ -91,16 +159,89 @@ class QueueSheetHelper(
     private fun updateSheetHeight() {
         val screenHeight = sheetRoot.resources.displayMetrics.heightPixels
         val sheetHeight = (screenHeight * SHEET_HEIGHT_RATIO).toInt()
-        sheetRoot.layoutParams = sheetRoot.layoutParams?.apply {
-            height = sheetHeight
+        val parent = sheetRoot.parent as? ViewGroup ?: return
+
+        val newParams: ViewGroup.LayoutParams = when (parent) {
+            is CoordinatorLayout -> {
+                val existing = sheetRoot.layoutParams as? CoordinatorLayout.LayoutParams
+                (existing ?: CoordinatorLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    sheetHeight,
+                )).apply {
+                    width = ViewGroup.LayoutParams.MATCH_PARENT
+                    height = sheetHeight
+                    gravity = Gravity.BOTTOM
+                }
+            }
+            is FrameLayout -> {
+                val existing = sheetRoot.layoutParams as? FrameLayout.LayoutParams
+                (existing ?: FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    sheetHeight,
+                )).apply {
+                    width = ViewGroup.LayoutParams.MATCH_PARENT
+                    height = sheetHeight
+                    gravity = Gravity.BOTTOM
+                }
+            }
+            else -> {
+                sheetRoot.layoutParams?.apply {
+                    width = ViewGroup.LayoutParams.MATCH_PARENT
+                    height = sheetHeight
+                } ?: ViewGroup.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    sheetHeight,
+                )
+            }
         }
-        (sheetRoot.parent as? View)?.let { parent ->
-            sheetRoot.translationY = if (isOpen) 0f else sheetHeight.toFloat()
-        }
+        sheetRoot.layoutParams = newParams
+        sheetRoot.translationY = if (isOpen) 0f else sheetHeight.toFloat()
+        parent.requestLayout()
+        sheetRoot.requestLayout()
+
+        Timber.d(
+            "QueueSheet: updateSheetHeight screenH=%d sheetH=%d isOpen=%b translationY=%.1f parent=%s",
+            screenHeight,
+            sheetHeight,
+            isOpen,
+            sheetRoot.translationY,
+            parent.javaClass.simpleName,
+        )
     }
 
     private fun canToggle(): Boolean {
         return System.currentTimeMillis() - lastToggleTime > DEBOUNCE_MS
+    }
+
+    private fun cancelTranslationAnimator() {
+        if (translationAnimator != null) {
+            Timber.d("QueueSheet: cancelTranslationAnimator (had running animator)")
+        }
+        translationAnimator?.removeAllListeners()
+        translationAnimator?.cancel()
+        translationAnimator = null
+    }
+
+    private fun logSheetState(reason: String) {
+        val lp = sheetRoot.layoutParams
+        Timber.d(
+            "QueueSheet: [%s] isOpen=%b isVisible(ext)=%b visibility=%d alpha=%.2f ty=%.1f z=%.1f " +
+                "size=%dx%d measured=%dx%d lpH=%s clickable=%b focusable=%b",
+            reason,
+            isOpen,
+            sheetRoot.isVisible,
+            sheetRoot.visibility,
+            sheetRoot.alpha,
+            sheetRoot.translationY,
+            sheetRoot.z,
+            sheetRoot.width,
+            sheetRoot.height,
+            sheetRoot.measuredWidth,
+            sheetRoot.measuredHeight,
+            if (lp != null) lp.height.toString() else "null",
+            sheetRoot.isClickable,
+            sheetRoot.isFocusable,
+        )
     }
 
     @SuppressLint("ClickableViewAccessibility")
@@ -113,6 +254,7 @@ class QueueSheetHelper(
                 velocityY: Float,
             ): Boolean {
                 if (velocityY > FLING_VELOCITY_THRESHOLD) {
+                    Timber.d("QueueSheet: fling-down on drag handle -> close()")
                     close()
                     return true
                 }

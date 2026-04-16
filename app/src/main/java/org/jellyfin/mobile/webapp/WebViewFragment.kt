@@ -38,6 +38,7 @@ import org.jellyfin.mobile.bridge.ExternalPlayer
 import org.jellyfin.mobile.bridge.MediaSegments
 import org.jellyfin.mobile.bridge.NativeInterface
 import org.jellyfin.mobile.bridge.NativePlayer
+import org.jellyfin.mobile.player.ui.PlayerFragment
 import org.jellyfin.mobile.player.ui.QueueItem
 import org.jellyfin.mobile.player.ui.QueueSheetAdapter
 import org.jellyfin.mobile.player.ui.QueueSheetHelper
@@ -102,6 +103,8 @@ class WebViewFragment : Fragment(), BackPressInterceptor, JellyfinWebChromeClien
     private var queueSheetHelper: QueueSheetHelper? = null
     private var queueSheetAdapter: QueueSheetAdapter? = null
     private var isWebFullscreen = false
+    /** When true, web shell fullscreen chrome is hidden so it cannot intercept touches over the native player. */
+    private var nativePlayerOverlaySuppressed = false
     private var swipeStartY = 0f
     private var swipeStartX = 0f
     private var lastSwipeToggleTime = 0L
@@ -233,11 +236,26 @@ class WebViewFragment : Fragment(), BackPressInterceptor, JellyfinWebChromeClien
     fun onWebFullscreenChanged(isFullscreen: Boolean) {
         isWebFullscreen = isFullscreen
         Timber.d("QueueSwipeWeb: onWebFullscreenChanged(%b)", isFullscreen)
-        webViewBinding?.rotateScreenButton?.isVisible = isFullscreen
-        webViewBinding?.root?.findViewById<View>(R.id.swipe_detection_zone)?.isVisible = isFullscreen
+        applyWebShellFullscreenOverlays()
         if (!isFullscreen) {
             queueSheetHelper?.close()
         }
+    }
+
+    /**
+     * Hides rotate + swipe strip while [PlayerFragment] covers the screen so bottom-edge touches
+     * (e.g. letterboxing) cannot be eaten by the web shell.
+     */
+    fun setNativePlayerOverlaySuppression(suppress: Boolean) {
+        nativePlayerOverlaySuppressed = suppress
+        applyWebShellFullscreenOverlays()
+    }
+
+    private fun applyWebShellFullscreenOverlays() {
+        val binding = webViewBinding ?: return
+        val showChrome = isWebFullscreen && !nativePlayerOverlaySuppressed
+        binding.rotateScreenButton.isVisible = showChrome
+        binding.root.findViewById<View>(R.id.swipe_detection_zone).isVisible = showChrome
     }
 
     fun onQueueDataReceived(json: String) {
@@ -358,9 +376,30 @@ class WebViewFragment : Fragment(), BackPressInterceptor, JellyfinWebChromeClien
         queueSheetAdapter?.submitList(items)
         queueSheetAdapter?.currentIndex = currentIndex
         queueSheetHelper?.updateQueueState(items.isNotEmpty())
+        if (isNativePlayerResumed()) {
+            Timber.d(
+                "QueueSwipeWeb: showQueueItems — skip web queue open (native PlayerFragment is resumed; " +
+                    "queue data still updated for when you return to web)",
+            )
+            return
+        }
         if (queueSheetHelper?.isOpen != true) {
             queueSheetHelper?.open(currentIndex)
         }
+    }
+
+    /**
+     * While [PlayerFragment] is on the back stack and resumed, the web queue sheet must not auto-open:
+     * it lives under [CoordinatorLayout] and would steal or confuse touches over the native player.
+     */
+    private fun isNativePlayerResumed(): Boolean =
+        requireActivity().supportFragmentManager.fragments.any { it is PlayerFragment && it.isResumed }
+
+    /**
+     * Ensures the web queue overlay is dismissed when native playback starts (see [showQueueItems]).
+     */
+    fun closeQueueSheetForNativePlayback() {
+        queueSheetHelper?.close()
     }
 
     private fun fetchCurrentItemAndSiblings(currentItemId: java.util.UUID) {

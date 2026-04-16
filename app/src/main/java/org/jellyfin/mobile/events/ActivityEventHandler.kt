@@ -76,6 +76,13 @@ class ActivityEventHandler(
                 val args = Bundle().apply {
                     putParcelable(Constants.EXTRA_MEDIA_PLAY_OPTIONS, event.playOptions)
                 }
+                supportFragmentManager.fragments
+                    .filterIsInstance<WebViewFragment>()
+                    .firstOrNull()
+                    ?.apply {
+                        closeQueueSheetForNativePlayback()
+                        setNativePlayerOverlaySuppression(true)
+                    }
                 supportFragmentManager.addFragment<PlayerFragment>(args)
             }
             is ActivityEvent.OpenUrl -> {
