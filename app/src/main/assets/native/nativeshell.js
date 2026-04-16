@@ -257,6 +257,95 @@ window.NativeShell = {
             const playlistItemId = target && (target.PlaylistItemId || target.Id || target.ItemId || target.id);
             const targetItemId = target && (target.Id || target.ItemId || target.id) || itemId;
 
+            const resolveServerId = () => {
+                // 1) Try active runtime objects first.
+                const player = readMember(pm, 'getCurrentPlayer');
+                const direct = [
+                    readMember(pm, 'serverId'),
+                    readMember(pm, 'ServerId'),
+                    pm && pm.serverId,
+                    pm && pm.ServerId,
+                    readMember(player, 'serverId'),
+                    readMember(player, 'ServerId'),
+                    player && player.serverId,
+                    player && player.ServerId,
+                ].find((v) => typeof v === 'string' && v.length > 0);
+                if (direct) return direct;
+
+                // 2) Try stored web credentials (same source used in JellyfinWebViewClient).
+                try {
+                    const raw = window.localStorage && window.localStorage.getItem('jellyfin_credentials');
+                    if (raw) {
+                        const creds = JSON.parse(raw);
+                        const servers = Array.isArray(creds && creds.Servers) ? creds.Servers : [];
+                        const origin = String(window.location && window.location.origin || '').toLowerCase();
+                        const matched = servers.find((s) => {
+                            const addresses = [
+                                s && s.Address,
+                                s && s.ManualAddress,
+                                s && s.LocalAddress,
+                            ].filter((a) => typeof a === 'string').map((a) => a.toLowerCase());
+                            return addresses.some((a) => origin && a && (origin.startsWith(a) || a.startsWith(origin)));
+                        }) || servers[0] || null;
+                        const sid = matched && (matched.Id || matched.ServerId || matched.serverId) || null;
+                        if (typeof sid === 'string' && sid.length > 0) return sid;
+                    }
+                } catch (e) {
+                    console.warn('[QueueSelect] resolveServerId from credentials failed', e);
+                }
+                return null;
+            };
+            const resolveUserId = () => {
+                const player = readMember(pm, 'getCurrentPlayer');
+                const direct = [
+                    readMember(pm, 'userId'),
+                    readMember(pm, 'UserId'),
+                    pm && pm.userId,
+                    pm && pm.UserId,
+                    readMember(player, 'userId'),
+                    readMember(player, 'UserId'),
+                    player && player.userId,
+                    player && player.UserId,
+                ].find((v) => typeof v === 'string' && v.length > 0);
+                if (direct) return direct;
+                try {
+                    const raw = window.localStorage && window.localStorage.getItem('jellyfin_credentials');
+                    if (raw) {
+                        const creds = JSON.parse(raw);
+                        const servers = Array.isArray(creds && creds.Servers) ? creds.Servers : [];
+                        const origin = String(window.location && window.location.origin || '').toLowerCase();
+                        const matched = servers.find((s) => {
+                            const addresses = [
+                                s && s.Address,
+                                s && s.ManualAddress,
+                                s && s.LocalAddress,
+                            ].filter((a) => typeof a === 'string').map((a) => a.toLowerCase());
+                            return addresses.some((a) => origin && a && (origin.startsWith(a) || a.startsWith(origin)));
+                        }) || servers[0] || null;
+                        const uid = matched && (matched.UserId || matched.userId) || null;
+                        if (typeof uid === 'string' && uid.length > 0) return uid;
+                    }
+                } catch (e) {
+                    console.warn('[QueueSelect] resolveUserId from credentials failed', e);
+                }
+                return null;
+            };
+            const serverId = resolveServerId();
+            const userId = resolveUserId();
+            const withPlaybackContext = (payload) => {
+                if (!payload || typeof payload !== 'object') return payload;
+                const ctx = { ...payload };
+                if (serverId) {
+                    ctx.serverId = serverId;
+                    ctx.ServerId = serverId;
+                }
+                if (userId) {
+                    ctx.userId = userId;
+                    ctx.UserId = userId;
+                }
+                return ctx;
+            };
+
             const protoMethods = (() => {
                 try {
                     return Object.getOwnPropertyNames(Object.getPrototypeOf(pm)).filter(Boolean);
@@ -264,7 +353,20 @@ window.NativeShell = {
                     return [];
                 }
             })();
-            console.log('[QueueSelect] tapToken=', token, 'itemId=', itemId, 'playlistItemId=', playlistItemId, 'playlistLen=', playlist.length);
+            console.log(
+                '[QueueSelect] tapToken=',
+                token,
+                'itemId=',
+                itemId,
+                'playlistItemId=',
+                playlistItemId,
+                'playlistLen=',
+                playlist.length,
+                'serverId=',
+                serverId,
+                'userId=',
+                userId,
+            );
             console.log('[QueueSelect] pm methods:', protoMethods.join(', '));
 
             // 1) Web queue path only when queue exists.
@@ -311,6 +413,23 @@ window.NativeShell = {
                         console.log('[QueueSelect] attempt ok:', label, 'before=', before, 'after=', after);
                         return true;
                     }
+
+                    // Some Jellyfin runtimes do not expose currentItem/getCurrentItem while player is active
+                    // ("player cannot be null"). In that case we cannot verify state transition reliably.
+                    // If the play call did not throw and both probes are null, treat as success to avoid
+                    // retry storms and fallback re-navigation/restart loops.
+                    if (!before && !after && label.startsWith('pm.play#')) {
+                        console.warn(
+                            '[QueueSelect] attempt assumed-ok (state unavailable):',
+                            label,
+                            'before=',
+                            before,
+                            'after=',
+                            after,
+                        );
+                        return true;
+                    }
+
                     console.warn('[QueueSelect] attempt no-switch:', label, 'before=', before, 'after=', after);
                     return false;
                 } catch (e) {
@@ -323,14 +442,11 @@ window.NativeShell = {
             const playFn = typeof pm.play === 'function' ? pm.play.bind(pm) : null;
             if (playFn) {
                 const attempts = [
-                    // In this runtime, ids/itemIds payloads are more reliable than items[].
-                    () => playFn({ ids: [targetItemId], startIndex: 0, mediaType: 'Video' }),
-                    () => playFn({ ids: [targetItemId], startPositionTicks: 0, mediaType: 'Video' }),
-                    () => playFn({ ids: [targetItemId], startIndex: 0 }),
-                    () => playFn({ itemIds: [targetItemId], startIndex: 0, mediaType: 'Video' }),
-                    () => playFn({ itemIds: [targetItemId] }),
-                    () => playFn([targetItemId], 0),
-                    () => playFn(targetItemId),
+                    // Keep only ids-based object payloads for this runtime.
+                    () => playFn(withPlaybackContext({ ids: [targetItemId], startIndex: 0, mediaType: 'Video', fullscreen: true })),
+                    () => playFn(withPlaybackContext({ ids: [targetItemId], startPositionTicks: 0, mediaType: 'Video', fullscreen: true })),
+                    () => playFn(withPlaybackContext({ ids: [targetItemId], startIndex: 0 })),
+                    () => playFn(withPlaybackContext({ ids: [targetItemId] })),
                 ];
                 for (const [idx, attempt] of attempts.entries()) {
                     if (await tryAttempt(`pm.play#${idx + 1}`, attempt)) return true;
