@@ -27,10 +27,13 @@ import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.webkit.WebViewAssetLoader.AssetsPathHandler
 import androidx.webkit.WebViewCompat
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.jellyfin.mobile.R
 import org.jellyfin.mobile.app.ApiClientController
 import org.jellyfin.mobile.app.AppPreferences
+import org.jellyfin.mobile.data.dao.UserDao
 import org.jellyfin.mobile.bridge.ExternalPlayer
 import org.jellyfin.mobile.bridge.MediaSegments
 import org.jellyfin.mobile.bridge.NativeInterface
@@ -39,11 +42,16 @@ import org.jellyfin.mobile.player.ui.QueueItem
 import org.jellyfin.mobile.player.ui.QueueSheetAdapter
 import org.jellyfin.mobile.player.ui.QueueSheetHelper
 import org.jellyfin.sdk.api.client.ApiClient
+import org.jellyfin.sdk.api.client.util.AuthorizationHeaderBuilder
 import org.jellyfin.sdk.api.client.extensions.itemsApi
+import org.jellyfin.sdk.api.client.extensions.tvShowsApi
 import org.jellyfin.sdk.api.client.extensions.userLibraryApi
+import org.jellyfin.sdk.model.api.BaseItemDto
 import org.jellyfin.sdk.model.api.BaseItemKind
 import org.jellyfin.sdk.model.api.ImageType
+import org.jellyfin.sdk.model.api.ItemSortBy
 import org.jellyfin.sdk.model.api.SortOrder
+import org.jellyfin.sdk.model.api.request.GetEpisodesRequest
 import org.jellyfin.sdk.model.extensions.ticks
 import org.jellyfin.sdk.model.serializer.toUUIDOrNull
 import org.json.JSONObject
@@ -65,6 +73,7 @@ import org.jellyfin.mobile.utils.requestNoBatteryOptimizations
 import org.jellyfin.mobile.utils.runOnUiThread
 import org.koin.android.ext.android.inject
 import timber.log.Timber
+import java.util.UUID
 
 class WebViewFragment : Fragment(), BackPressInterceptor, JellyfinWebChromeClient.FileChooserListener {
     val appPreferences: AppPreferences by inject()
@@ -75,6 +84,8 @@ class WebViewFragment : Fragment(), BackPressInterceptor, JellyfinWebChromeClien
     private val nativePlayer: NativePlayer by inject()
     private lateinit var externalPlayer: ExternalPlayer
     private val mediaSegments: MediaSegments by inject()
+    private val apiClient: ApiClient by inject()
+    private val userDao: UserDao by inject()
 
     lateinit var server: ServerEntity
         private set
@@ -237,24 +248,61 @@ class WebViewFragment : Fragment(), BackPressInterceptor, JellyfinWebChromeClien
             val currentIndex = data.optInt("currentIndex", 0)
 
             if (itemsArray.length() > 0) {
-                val items = (0 until itemsArray.length()).map { i ->
-                    val obj = itemsArray.getJSONObject(i)
-                    QueueItem(
-                        itemId = obj.getString("itemId").toUUIDOrNull() ?: return,
-                        title = obj.optString("title", ""),
-                        seriesName = obj.optString("seriesName", null),
-                        duration = kotlin.time.Duration.ZERO.let {
-                            val ticks = obj.optLong("runTimeTicks", 0)
-                            if (ticks > 0) kotlin.time.Duration.parse("${ticks / 10_000}ms") else it
-                        },
-                        imageTag = obj.optString("imageTag", null),
+                val items = buildList {
+                    for (i in 0 until itemsArray.length()) {
+                        val obj = itemsArray.getJSONObject(i)
+                        val itemId = obj.optString("itemId", "").toUUIDOrNull() ?: continue
+                        add(
+                            QueueItem(
+                                itemId = itemId,
+                                title = obj.optString("title", ""),
+                                seriesName = obj.optString("seriesName", null),
+                                duration = kotlin.time.Duration.ZERO.let {
+                                    val ticks = obj.optLong("runTimeTicks", 0)
+                                    if (ticks > 0) kotlin.time.Duration.parse("${ticks / 10_000}ms") else it
+                                },
+                                imageTag = obj.optString("imageTag", null),
+                            ),
+                        )
+                    }
+                }
+                if (items.isNotEmpty()) {
+                    val safeIndex = currentIndex.coerceIn(0, items.lastIndex)
+                    Timber.d(
+                        "QueueSwipeWeb API: (no HTTP) queue from WebView JS | items=%d currentIndex=%d",
+                        items.size,
+                        safeIndex,
+                    )
+                    showQueueItems(items, safeIndex)
+                } else {
+                    Timber.d("QueueSwipeWeb: playlist JSON had %d rows but no valid itemIds", itemsArray.length())
+                    showQueueItems(emptyList(), 0)
+                }
+            } else {
+                val rawCurrentItemId = data.optString("currentItemId", "").trim()
+                val rawParentId = data.optString("parentId", "").trim()
+                val currentItemId = rawCurrentItemId.toUUIDOrNull()
+                val parentId = rawParentId.toUUIDOrNull()
+                Timber.d("QueueSwipeWeb: empty queue, fallback currentItemId=%s, parentId=%s", currentItemId, parentId)
+                if (rawCurrentItemId.isNotEmpty() && currentItemId == null) {
+                    Timber.w(
+                        "QueueSwipeWeb HTTP: no Jellyfin request — currentItemId is not a UUID (raw=\"%s\"). " +
+                            "Native fallback needs a real Item Id (GUID).",
+                        rawCurrentItemId,
                     )
                 }
-                showQueueItems(items, currentIndex)
-            } else {
-                val currentItemId = data.optString("currentItemId", "").toUUIDOrNull()
-                val parentId = data.optString("parentId", "").toUUIDOrNull()
-                Timber.d("QueueSwipeWeb: empty queue, fallback currentItemId=%s, parentId=%s", currentItemId, parentId)
+                if (rawParentId.isNotEmpty() && parentId == null) {
+                    Timber.w(
+                        "QueueSwipeWeb HTTP: no Jellyfin request — parentId is not a UUID (raw=\"%s\").",
+                        rawParentId,
+                    )
+                }
+                if (rawCurrentItemId.isEmpty() && rawParentId.isEmpty()) {
+                    Timber.w(
+                        "QueueSwipeWeb HTTP: no Jellyfin request — JS payload has no fallback ids " +
+                            "(currentItemId/parentId are both empty).",
+                    )
+                }
 
                 if (parentId != null) {
                     fetchSiblingItems(parentId, currentItemId)
@@ -266,7 +314,44 @@ class WebViewFragment : Fragment(), BackPressInterceptor, JellyfinWebChromeClien
             }
         } catch (e: Exception) {
             Timber.e(e, "QueueSwipeWeb: error parsing queue data")
+            showQueueItems(emptyList(), 0)
         }
+    }
+
+    /**
+     * Logs the same GET URL the Jellyfin Kotlin SDK would call, plus [Authorization] and [Accept] headers.
+     * Warning: [Authorization] includes the access token; visible in logcat (debug only).
+     */
+    private fun logQueueJellyfinHttpCall(
+        operationName: String,
+        pathTemplate: String,
+        pathParameters: Map<String, Any?> = emptyMap(),
+        queryParameters: Map<String, Any?> = emptyMap(),
+    ) {
+        val baseUrl = apiClient.baseUrl
+        if (baseUrl.isNullOrBlank()) {
+            Timber.w("QueueSwipeWeb HTTP: %s skipped — baseUrl is null", operationName)
+            return
+        }
+        val fullUrl = runCatching {
+            apiClient.createUrl(pathTemplate, pathParameters, queryParameters)
+        }.getOrElse { e ->
+            "$baseUrl$pathTemplate (createUrl failed: ${e.message})"
+        }
+        val authorization = AuthorizationHeaderBuilder.buildHeader(
+            clientName = apiClient.clientInfo.name,
+            clientVersion = apiClient.clientInfo.version,
+            deviceId = apiClient.deviceInfo.id,
+            deviceName = apiClient.deviceInfo.name,
+            accessToken = apiClient.accessToken,
+        )
+        Timber.d(
+            "QueueSwipeWeb HTTP: GET %s | URL=%s | Authorization=%s | Accept=%s",
+            operationName,
+            fullUrl,
+            authorization,
+            ApiClient.HEADER_ACCEPT,
+        )
     }
 
     private fun showQueueItems(items: List<QueueItem>, currentIndex: Int) {
@@ -280,15 +365,21 @@ class WebViewFragment : Fragment(), BackPressInterceptor, JellyfinWebChromeClien
 
     private fun fetchCurrentItemAndSiblings(currentItemId: java.util.UUID) {
         lifecycleScope.launch {
+            val queuedUserId = queryQueueUserId()
+            logQueueJellyfinHttpCall(
+                operationName = "GetItem",
+                pathTemplate = "/Items/{itemId}",
+                pathParameters = mapOf("itemId" to currentItemId),
+                queryParameters = buildMap { queuedUserId?.let { put("userId", it) } },
+            )
             try {
-                val apiClient: ApiClient by inject()
-                val item = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                    apiClient.userLibraryApi.getItem(currentItemId).content
+                val item = withContext(Dispatchers.IO) {
+                    apiClient.userLibraryApi.getItem(currentItemId, queuedUserId).content
                 }
                 val parentId = item.parentId
                 Timber.d("QueueSwipeWeb: fetched item parentId=%s", parentId)
                 if (parentId != null) {
-                    fetchSiblingItems(parentId, currentItemId)
+                    loadQueueFromParentOrAdjacent(parentId, currentItemId, queuedUserId)
                 } else {
                     val singleItem = QueueItem(
                         itemId = currentItemId,
@@ -300,8 +391,13 @@ class WebViewFragment : Fragment(), BackPressInterceptor, JellyfinWebChromeClien
                     showQueueItems(listOf(singleItem), 0)
                 }
             } catch (e: Exception) {
-                Timber.e(e, "QueueSwipeWeb: failed to fetch current item")
-                showQueueItems(emptyList(), 0)
+                Timber.e(e, "QueueSwipeWeb: failed to fetch current item, trying adjacentTo")
+                try {
+                    loadQueueFromParentOrAdjacent(null, currentItemId, queuedUserId)
+                } catch (e2: Exception) {
+                    Timber.e(e2, "QueueSwipeWeb: adjacent fallback failed")
+                    showQueueItems(emptyList(), 0)
+                }
             }
         }
     }
@@ -309,32 +405,8 @@ class WebViewFragment : Fragment(), BackPressInterceptor, JellyfinWebChromeClien
     private fun fetchSiblingItems(parentId: java.util.UUID, currentItemId: java.util.UUID?) {
         lifecycleScope.launch {
             try {
-                val apiClient: ApiClient by inject()
-                val response = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                    apiClient.itemsApi.getItems(
-                        parentId = parentId,
-                        includeItemTypes = listOf(BaseItemKind.MOVIE, BaseItemKind.EPISODE, BaseItemKind.VIDEO, BaseItemKind.MUSIC_VIDEO, BaseItemKind.TRAILER),
-                        sortBy = listOf(org.jellyfin.sdk.model.api.ItemSortBy.SORT_NAME),
-                        sortOrder = listOf(SortOrder.ASCENDING),
-                        recursive = true,
-                        limit = 100,
-                    ).content
-                }
-                val resultItems = response.items.orEmpty()
-                Timber.d("QueueSwipeWeb: fetched %d sibling items from parentId=%s", resultItems.size, parentId)
-
-                var currentIndex = 0
-                val items = resultItems.mapIndexed { index, dto ->
-                    if (dto.id == currentItemId) currentIndex = index
-                    QueueItem(
-                        itemId = dto.id,
-                        title = dto.name.orEmpty(),
-                        seriesName = dto.seriesName,
-                        duration = dto.runTimeTicks?.ticks ?: kotlin.time.Duration.ZERO,
-                        imageTag = dto.imageTags?.get(ImageType.PRIMARY),
-                    )
-                }
-                showQueueItems(items, currentIndex)
+                val queuedUserId = queryQueueUserId()
+                loadQueueFromParentOrAdjacent(parentId, currentItemId, queuedUserId)
             } catch (e: Exception) {
                 Timber.e(e, "QueueSwipeWeb: failed to fetch sibling items")
                 showQueueItems(emptyList(), 0)
@@ -342,10 +414,182 @@ class WebViewFragment : Fragment(), BackPressInterceptor, JellyfinWebChromeClien
         }
     }
 
+    /**
+     * Resolves the signed-in Jellyfin user id (UUID) for library-scoped queries.
+     * OpenAPI: optional `userId` query on [GetItems](https://api.jellyfin.org/openapi/jellyfin-openapi-stable.json)
+     * (`GET /Items`) and [GetItem](https://api.jellyfin.org/openapi/jellyfin-openapi-stable.json) (`GET /Items/{itemId}`).
+     */
+    private suspend fun queryQueueUserId(): UUID? = withContext(Dispatchers.IO) {
+        val serverId = appPreferences.currentServerId ?: return@withContext null
+        val userPk = appPreferences.currentUserId ?: return@withContext null
+        val uuid = userDao.getServerUser(serverId, userPk)?.user?.userId?.toUUIDOrNull()
+        Timber.d(
+            "QueueSwipeWeb API: (local Room) resolve Jellyfin userId for query param | userId=%s",
+            uuid ?: "null",
+        )
+        uuid
+    }
+
+    private suspend fun resolveParentKind(parentId: UUID, queuedUserId: UUID?): BaseItemKind? =
+        withContext(Dispatchers.IO) {
+            logQueueJellyfinHttpCall(
+                operationName = "GetItem (resolve parent type)",
+                pathTemplate = "/Items/{itemId}",
+                pathParameters = mapOf("itemId" to parentId),
+                queryParameters = buildMap { queuedUserId?.let { put("userId", it) } },
+            )
+            runCatching {
+                apiClient.userLibraryApi.getItem(parentId, queuedUserId).content.type
+            }.getOrNull()
+        }
+
+    /**
+     * Loads children of [parentId] (several query shapes), then falls back to `adjacentTo` when the
+     * parent query returns nothing — e.g. some playlist / web client combinations.
+     *
+     * Server contract: Jellyfin stable OpenAPI — [GetItems](https://api.jellyfin.org/openapi/jellyfin-openapi-stable.json)
+     * (`GET /Items`, `operationId` GetItems) with `parentId`, `recursive`, `includeItemTypes`, `adjacentTo`, `userId`;
+     * for a **Series** parent, [GetEpisodes](https://api.jellyfin.org/openapi/jellyfin-openapi-stable.json)
+     * (`GET /Shows/{seriesId}/Episodes`) via [org.jellyfin.sdk.api.operations.TvShowsApi.getEpisodes].
+     */
+    private suspend fun loadQueueFromParentOrAdjacent(
+        parentId: java.util.UUID?,
+        currentItemId: java.util.UUID?,
+        queuedUserId: UUID?,
+    ) {
+        Timber.d(
+            "QueueSwipeWeb API: loadQueueFromParentOrAdjacent | parentId=%s currentItemId=%s userId=%s",
+            parentId ?: "null",
+            currentItemId ?: "null",
+            queuedUserId ?: "null",
+        )
+        val fromParent = if (parentId != null) querySiblingDtos(parentId, queuedUserId) else emptyList()
+        val adjacent = if (fromParent.isEmpty() && currentItemId != null) {
+            Timber.d("QueueSwipeWeb: parent query returned 0, trying adjacentTo=%s", currentItemId)
+            queryAdjacentDtos(currentItemId, queuedUserId)
+        } else {
+            emptyList()
+        }
+        val resultItems = fromParent.ifEmpty { adjacent }
+        Timber.d(
+            "QueueSwipeWeb: showing %d items (parent=%d, adjacent=%d)",
+            resultItems.size,
+            fromParent.size,
+            adjacent.size,
+        )
+        showQueueFromDtos(resultItems, currentItemId)
+    }
+
+    private suspend fun querySiblingDtos(parentId: java.util.UUID, queuedUserId: UUID?): List<BaseItemDto> {
+        val parentKind = resolveParentKind(parentId, queuedUserId)
+
+        if (parentKind == BaseItemKind.SERIES && queuedUserId != null) {
+            logQueueJellyfinHttpCall(
+                operationName = "GetEpisodes",
+                pathTemplate = "/Shows/{seriesId}/Episodes",
+                pathParameters = mapOf("seriesId" to parentId),
+                queryParameters = buildMap {
+                    put("userId", queuedUserId)
+                    put("limit", QUEUE_EPISODES_FROM_SERIES_LIMIT)
+                    put("sortBy", ItemSortBy.INDEX_NUMBER)
+                },
+            )
+            val fromSeries = withContext(Dispatchers.IO) {
+                apiClient.tvShowsApi.getEpisodes(
+                    GetEpisodesRequest(
+                        seriesId = parentId,
+                        userId = queuedUserId,
+                        limit = QUEUE_EPISODES_FROM_SERIES_LIMIT,
+                        sortBy = ItemSortBy.INDEX_NUMBER,
+                    ),
+                ).content.items.orEmpty()
+            }
+            val seriesFiltered = fromSeries.filter { it.type in QUEUE_MEDIA_KINDS }.ifEmpty { fromSeries }
+            if (seriesFiltered.isNotEmpty()) return seriesFiltered
+        }
+
+        val sortBy = when (parentKind) {
+            BaseItemKind.SEASON -> listOf(ItemSortBy.PARENT_INDEX_NUMBER, ItemSortBy.INDEX_NUMBER)
+            else -> listOf(ItemSortBy.SORT_NAME)
+        }
+
+        val typedKinds = QUEUE_MEDIA_KINDS.toList()
+        suspend fun runQuery(recursive: Boolean, kinds: Collection<BaseItemKind>?): List<BaseItemDto> =
+            withContext(Dispatchers.IO) {
+                val queryParameters = buildMap<String, Any?> {
+                    queuedUserId?.let { put("userId", it) }
+                    put("parentId", parentId)
+                    put("recursive", recursive)
+                    put("limit", 100)
+                    put("sortBy", sortBy)
+                    put("sortOrder", listOf(SortOrder.ASCENDING))
+                    if (kinds != null) put("includeItemTypes", kinds)
+                }
+                logQueueJellyfinHttpCall(
+                    operationName = "GetItems",
+                    pathTemplate = "/Items",
+                    queryParameters = queryParameters,
+                )
+                apiClient.itemsApi.getItems(
+                    userId = queuedUserId,
+                    parentId = parentId,
+                    includeItemTypes = kinds ?: emptyList(),
+                    sortBy = sortBy,
+                    sortOrder = listOf(SortOrder.ASCENDING),
+                    recursive = recursive,
+                    limit = 100,
+                ).content.items.orEmpty()
+            }
+
+        var items = runQuery(recursive = false, kinds = typedKinds)
+        if (items.isEmpty()) items = runQuery(recursive = true, kinds = typedKinds)
+        if (items.isEmpty()) items = runQuery(recursive = false, kinds = null)
+        if (items.isEmpty()) items = runQuery(recursive = true, kinds = null)
+        return items.filter { it.type in QUEUE_MEDIA_KINDS }.ifEmpty { items }
+    }
+
+    private suspend fun queryAdjacentDtos(currentItemId: java.util.UUID, queuedUserId: UUID?): List<BaseItemDto> {
+        val raw = withContext(Dispatchers.IO) {
+            logQueueJellyfinHttpCall(
+                operationName = "GetItems (adjacentTo)",
+                pathTemplate = "/Items",
+                queryParameters = buildMap {
+                    queuedUserId?.let { put("userId", it) }
+                    put("adjacentTo", currentItemId)
+                    put("sortBy", listOf(ItemSortBy.SORT_NAME))
+                    put("sortOrder", listOf(SortOrder.ASCENDING))
+                    put("limit", 100)
+                },
+            )
+            apiClient.itemsApi.getItems(
+                userId = queuedUserId,
+                adjacentTo = currentItemId,
+                sortBy = listOf(ItemSortBy.SORT_NAME),
+                sortOrder = listOf(SortOrder.ASCENDING),
+                limit = 100,
+            ).content.items.orEmpty()
+        }
+        return raw.filter { it.type in QUEUE_MEDIA_KINDS }.ifEmpty { raw }
+    }
+
+    private fun showQueueFromDtos(resultItems: List<BaseItemDto>, currentItemId: java.util.UUID?) {
+        var currentIndex = 0
+        val items = resultItems.mapIndexed { index, dto ->
+            if (dto.id == currentItemId) currentIndex = index
+            QueueItem(
+                itemId = dto.id,
+                title = dto.name.orEmpty(),
+                seriesName = dto.seriesName,
+                duration = dto.runTimeTicks?.ticks ?: kotlin.time.Duration.ZERO,
+                imageTag = dto.imageTags?.get(ImageType.PRIMARY),
+            )
+        }
+        showQueueItems(items, currentIndex)
+    }
+
     private fun setupQueueSheet() {
         val binding = webViewBinding ?: return
         val queueSheetRoot = binding.root.findViewById<View>(R.id.queue_sheet_root) ?: return
-        val apiClient: ApiClient by inject()
 
         queueSheetAdapter = QueueSheetAdapter(apiClient) { index ->
             val items = queueSheetAdapter?.currentList ?: return@QueueSheetAdapter
@@ -481,8 +725,21 @@ class WebViewFragment : Fragment(), BackPressInterceptor, JellyfinWebChromeClien
     }
 
     companion object {
+        private val QUEUE_MEDIA_KINDS = setOf(
+            BaseItemKind.MOVIE,
+            BaseItemKind.EPISODE,
+            BaseItemKind.VIDEO,
+            BaseItemKind.MUSIC_VIDEO,
+            BaseItemKind.TRAILER,
+            BaseItemKind.AUDIO,
+            BaseItemKind.RECORDING,
+        )
+
         private const val SWIPE_UP_MIN_DISTANCE = 100f
         private const val SWIPE_UP_MAX_DRIFT = 400f
         private const val SWIPE_DEBOUNCE_MS = 300L
+
+        /** Cap for [GetEpisodes](https://api.jellyfin.org/openapi/jellyfin-openapi-stable.json) when parent is a Series. */
+        private const val QUEUE_EPISODES_FROM_SERIES_LIMIT = 200
     }
 }

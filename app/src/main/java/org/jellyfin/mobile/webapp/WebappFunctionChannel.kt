@@ -24,7 +24,7 @@ class WebappFunctionChannel {
     fun seekTo(pos: Long) = call("$PLAYBACK_MANAGER.seekMs($pos);")
     fun goBack() = call("$NAVIGATION_HELPER.goBack();")
     fun requestQueueData() = call("window.NativeShell.getQueueData();")
-    fun selectQueueItem(itemId: String) = call("$PLAYBACK_MANAGER.setCurrentPlaylistItem('$itemId');")
+    fun selectQueueItem(itemId: String) = call("window.NativeShell.selectQueueItem('$itemId');")
 
     companion object {
         private const val NAVIGATION_HELPER = "window.NavigationHelper"
